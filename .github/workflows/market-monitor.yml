@@ -2,8 +2,8 @@ name: Market Monitor - Real-time Alerts
 
 on:
   schedule:
-    # Run every 5 minutes, 24/7/365
-    - cron: '*/5 * * * *'
+    # Run every MINUTE for constant updates
+    - cron: '* * * * *'
 
   # Allow manual trigger
   workflow_dispatch:

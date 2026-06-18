@@ -1,0 +1,36 @@
+name: Market Monitor - Test (Every Minute)
+
+on:
+  schedule:
+    # Run every minute for testing
+    - cron: '* * * * *'
+
+  workflow_dispatch:
+
+jobs:
+  market-monitor-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm install --production
+
+      - name: Run insider intelligence monitor
+        env:
+          TELEGRAM_BOT_TOKEN: 8676839503:AAH3wz-_zwO6IHaXoPuxL5u0MaDZ0Zi_Z7s
+          TELEGRAM_CHAT_ID: 6470474178
+        run: |
+          timeout 50 node market-monitor-insider.js || true
+
+      - name: Verification
+        if: always()
+        run: echo "Monitor check completed at $(date)"
