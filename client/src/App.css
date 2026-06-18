@@ -106,15 +106,23 @@ button:disabled {
   justify-content: space-between;
   align-items: center;
   margin-bottom: 40px;
-  background: white;
-  padding: 20px;
-  border-radius: 8px;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+  background: linear-gradient(135deg, #5b21b6 0%, #7c3aed 100%);
+  padding: 30px;
+  border-radius: 12px;
+  box-shadow: 0 4px 12px rgba(91, 33, 182, 0.2);
+  color: white;
 }
 
 .dashboard-header h1 {
-  font-size: 24px;
-  color: #333;
+  font-size: 28px;
+  color: white;
+  margin: 0;
+}
+
+.dashboard-header p {
+  color: rgba(255, 255, 255, 0.9);
+  margin: 5px 0;
+  font-size: 14px;
 }
 
 .user-info {
@@ -122,14 +130,22 @@ button:disabled {
 }
 
 .user-info p {
-  color: #666;
+  color: rgba(255, 255, 255, 0.9);
   margin: 5px 0;
+  font-size: 14px;
 }
 
 .logout-btn {
   width: auto;
   padding: 8px 16px;
   margin-top: 10px;
+  background: rgba(255, 255, 255, 0.2);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  color: white;
+}
+
+.logout-btn:hover {
+  background: rgba(255, 255, 255, 0.3);
 }
 
 .video-upload {
@@ -147,20 +163,29 @@ button:disabled {
 
 .upload-area {
   border: 2px dashed #5b21b6;
-  border-radius: 8px;
-  padding: 40px;
+  border-radius: 12px;
+  padding: 50px 20px;
   text-align: center;
   cursor: pointer;
-  transition: background 0.3s;
+  transition: all 0.3s ease;
+  background: #f8f5ff;
 }
 
 .upload-area:hover {
   background: #f3e8ff;
+  border-color: #7c3aed;
+  transform: translateY(-2px);
 }
 
 .upload-area p {
   color: #666;
   margin-bottom: 10px;
+  font-weight: 500;
+}
+
+.upload-area p:first-child {
+  font-size: 32px;
+  margin-bottom: 15px;
 }
 
 .video-list {

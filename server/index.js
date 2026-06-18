@@ -5,6 +5,7 @@ import { initDatabase } from './db/init.js';
 import { authRouter } from './routes/auth.js';
 import { videoRouter } from './routes/videos.js';
 import { subscriptionRouter } from './routes/subscriptions.js';
+import { analyticsRouter } from './routes/analytics.js';
 
 dotenv.config();
 
@@ -19,6 +20,7 @@ initDatabase();
 app.use('/api/auth', authRouter);
 app.use('/api/videos', videoRouter);
 app.use('/api/subscriptions', subscriptionRouter);
+app.use('/api/analytics', analyticsRouter);
 
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', message: 'Content Repurposer API is running' });

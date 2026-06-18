@@ -70,6 +70,44 @@ export default function Dashboard() {
     }
   };
 
+  const copyToClipboard = async (text) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      alert('Copied to clipboard!');
+    } catch (err) {
+      alert('Failed to copy');
+    }
+  };
+
+  const downloadCaptions = (video) => {
+    const getRepurposedStmt = async () => {
+      try {
+        const response = await axios.get(
+          `/api/videos/${video.id}/repurposed`,
+          { headers: { Authorization: `Bearer ${token}` } }
+        );
+        const repurposed = response.data.repurposed;
+
+        let csvContent = 'Platform,Caption,Hashtags\n';
+        repurposed.forEach(item => {
+          const escapedCaption = `"${item.caption.replace(/"/g, '""')}"`;
+          const escapedHashtags = `"${item.hashtags.replace(/"/g, '""')}"`;
+          csvContent += `${item.platform},${escapedCaption},${escapedHashtags}\n`;
+        });
+
+        const blob = new Blob([csvContent], { type: 'text/csv' });
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${video.title || 'captions'}-repurposed.csv`;
+        a.click();
+      } catch (error) {
+        alert('Error downloading captions');
+      }
+    };
+    getRepurposedStmt();
+  };
+
   const logout = () => {
     localStorage.removeItem('token');
     localStorage.removeItem('user');
@@ -158,29 +196,62 @@ export default function Dashboard() {
 
               {expandedVideo === video.id && (
                 <div style={{ marginTop: '20px', paddingTop: '20px', borderTop: '1px solid #e5e7eb' }}>
-                  <p style={{ fontWeight: 'bold', marginBottom: '15px' }}>Generated Captions:</p>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
+                    <p style={{ fontWeight: 'bold', margin: 0 }}>Generated Captions:</p>
+                    <button
+                      onClick={() => downloadCaptions(video)}
+                      style={{ width: 'auto', padding: '6px 12px', fontSize: '12px' }}
+                    >
+                      📥 Download All
+                    </button>
+                  </div>
                   <div style={{ display: 'grid', gap: '15px' }}>
-                    {selectedPlatforms.map(platform => (
-                      <div key={platform} style={{
-                        background: '#f9fafb',
-                        padding: '15px',
-                        borderRadius: '4px',
-                        border: '1px solid #e5e7eb'
-                      }}>
-                        <h4 style={{ textTransform: 'uppercase', fontSize: '12px', color: '#5b21b6', marginBottom: '10px' }}>
-                          {platform}
-                        </h4>
-                        <p style={{ fontSize: '14px', color: '#333', lineHeight: '1.6', marginBottom: '10px' }}>
-                          [AI-Generated Caption for {platform}]
-                        </p>
-                        <div style={{ fontSize: '12px', color: '#666' }}>
-                          <strong>Hashtags:</strong> #trending #content #{platform}
+                    {selectedPlatforms.map(platform => {
+                      const fullCaption = `${platform.charAt(0).toUpperCase() + platform.slice(1)} caption goes here with AI-generated content`;
+                      const hashtags = '#viral #trending #content';
+                      return (
+                        <div key={platform} style={{
+                          background: '#f9fafb',
+                          padding: '15px',
+                          borderRadius: '4px',
+                          border: '1px solid #e5e7eb'
+                        }}>
+                          <h4 style={{ textTransform: 'uppercase', fontSize: '12px', color: '#5b21b6', marginBottom: '10px', margin: '0 0 10px 0' }}>
+                            📱 {platform}
+                          </h4>
+                          <div style={{
+                            background: 'white',
+                            padding: '10px',
+                            borderRadius: '3px',
+                            marginBottom: '10px',
+                            minHeight: '60px',
+                            maxHeight: '120px',
+                            overflowY: 'auto'
+                          }}>
+                            <p style={{ fontSize: '14px', color: '#333', lineHeight: '1.6', margin: '0 0 10px 0' }}>
+                              {fullCaption}
+                            </p>
+                            <div style={{ fontSize: '12px', color: '#666' }}>
+                              {hashtags}
+                            </div>
+                          </div>
+                          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                            <button
+                              onClick={() => copyToClipboard(fullCaption)}
+                              style={{ width: 'auto', padding: '6px 12px', fontSize: '12px', flex: 1, minWidth: '140px' }}
+                            >
+                              📋 Copy Caption
+                            </button>
+                            <button
+                              onClick={() => copyToClipboard(hashtags)}
+                              style={{ width: 'auto', padding: '6px 12px', fontSize: '12px', flex: 1, minWidth: '140px' }}
+                            >
+                              #️⃣ Copy Tags
+                            </button>
+                          </div>
                         </div>
-                        <button style={{ marginTop: '10px', width: 'auto', padding: '6px 12px', fontSize: '12px' }}>
-                          📋 Copy Caption
-                        </button>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
               )}
