@@ -5,3 +5,4 @@ node_modules/
 .DS_Store
 .monitor-state*.json
 .news-cache.json
+.alerts-sent.json
