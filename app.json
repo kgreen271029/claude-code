@@ -1,0 +1,37 @@
+{
+  "name": "24/7 Market Monitor",
+  "description": "Real-time market monitoring with Telegram alerts",
+  "repository": "https://github.com/kgreen271029/claude-code",
+  "keywords": ["market", "monitor", "crypto", "stocks", "telegram"],
+  "buildpacks": [
+    {
+      "url": "heroku/nodejs"
+    }
+  ],
+  "env": {
+    "TELEGRAM_BOT_TOKEN": {
+      "description": "Your Telegram Bot Token",
+      "value": "8676839503:AAH3wz-_zwO6IHaXoPuxL5u0MaDZ0Zi_Z7s",
+      "required": true
+    },
+    "TELEGRAM_CHAT_ID": {
+      "description": "Your Telegram Chat ID",
+      "value": "6470474178",
+      "required": true
+    },
+    "NODE_ENV": {
+      "description": "Node environment",
+      "value": "production",
+      "required": true
+    }
+  },
+  "formation": {
+    "web": {
+      "quantity": 0
+    },
+    "worker": {
+      "quantity": 1,
+      "size": "eco"
+    }
+  }
+}
