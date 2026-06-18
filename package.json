@@ -1,0 +1,27 @@
+{
+  "name": "content-repurposer",
+  "version": "0.1.0",
+  "description": "AI-powered content repurposing tool for TikTok, Instagram Reels, YouTube Shorts",
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently \"npm run server\" \"npm run client\"",
+    "server": "node server/index.js",
+    "client": "cd client && npm start",
+    "build": "cd client && npm run build",
+    "start": "node server/index.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "stripe": "^14.0.0",
+    "jsonwebtoken": "^9.1.0",
+    "bcryptjs": "^2.4.3",
+    "better-sqlite3": "^9.0.0",
+    "multer": "^1.4.5-lts.1",
+    "axios": "^1.6.0"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.0"
+  }
+}
