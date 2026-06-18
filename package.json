@@ -4,7 +4,10 @@
   "description": "",
   "main": "market-monitor.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node market-monitor-realtime.js",
+    "monitor": "node market-monitor-realtime.js",
+    "example": "node market-monitor.js",
+    "setup": "bash start-monitor.sh"
   },
   "repository": {
     "type": "git",

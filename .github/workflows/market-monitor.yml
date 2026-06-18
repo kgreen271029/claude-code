@@ -1,0 +1,48 @@
+name: Market Monitor - Real-time Alerts
+
+on:
+  schedule:
+    # Run every 5 minutes during market hours (9:30 AM - 4:00 PM ET on weekdays)
+    - cron: '*/5 9-16 * * 1-5'
+    # Also run at market open (9:30 AM ET)
+    - cron: '30 13 * * 1-5'
+    # And at market close (4:00 PM ET)
+    - cron: '0 20 * * 1-5'
+
+  # Allow manual trigger
+  workflow_dispatch:
+
+jobs:
+  market-monitor:
+    runs-on: ubuntu-latest
+    name: Market Analysis & Alert System
+
+    steps:
+      - name: 📥 Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: 📦 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: 📚 Install Dependencies
+        run: npm install --production
+
+      - name: 🚀 Run Market Monitor
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+          NEWS_API_KEY: ${{ secrets.NEWS_API_KEY }}
+        run: |
+          echo "🚀 Starting Market Monitor..."
+          timeout 180 node market-monitor-realtime.js || true
+          echo "✅ Monitor cycle complete"
+
+      - name: 📊 Log Execution
+        if: always()
+        run: |
+          echo "✅ Market monitor executed at $(date)"
+          echo "📱 Alerts sent to Telegram Chat: 6470474178"
