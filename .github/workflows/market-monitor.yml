@@ -28,8 +28,8 @@ jobs:
 
       - name: 🚀 Run Market Monitor
         env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_BOT_TOKEN: 8676839503:AAH3wz-_zwO6IHaXoPuxL5u0MaDZ0Zi_Z7s
+          TELEGRAM_CHAT_ID: 6470474178
         run: |
           echo "🚀 Starting 24/7 Market Monitor..."
           timeout 180 node market-monitor-24-7.js || true
