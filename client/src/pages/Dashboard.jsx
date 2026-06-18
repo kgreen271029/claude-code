@@ -4,6 +4,7 @@ import axios from 'axios';
 
 export default function Dashboard() {
   const [videos, setVideos] = useState([]);
+  const [stats, setStats] = useState({ total_videos: 0, total_captions: 0, platform_breakdown: {} });
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
@@ -19,7 +20,19 @@ export default function Dashboard() {
       setUser(JSON.parse(userData));
     }
     fetchVideos();
+    fetchStats();
   }, []);
+
+  const fetchStats = async () => {
+    try {
+      const response = await axios.get('/api/analytics/stats', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      setStats(response.data);
+    } catch (error) {
+      console.error('Error fetching stats:', error);
+    }
+  };
 
   const fetchVideos = async () => {
     try {
@@ -48,6 +61,7 @@ export default function Dashboard() {
         headers: { Authorization: `Bearer ${token}` }
       });
       fetchVideos();
+      fetchStats();
     } catch (error) {
       alert('Error uploading video');
     } finally {
@@ -63,8 +77,9 @@ export default function Dashboard() {
         { headers: { Authorization: `Bearer ${token}` } }
       );
       setExpandedVideo(videoId);
-      // Refresh the video to show new repurposed content
+      // Refresh the video and stats to show new repurposed content
       fetchVideos();
+      fetchStats();
     } catch (error) {
       alert('Error repurposing video');
     }
@@ -130,6 +145,54 @@ export default function Dashboard() {
           <p>{user?.email}</p>
           <button className="logout-btn" onClick={logout}>Logout</button>
         </div>
+      </div>
+
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+        gap: '15px',
+        marginBottom: '40px'
+      }}>
+        <div style={{
+          background: 'white',
+          padding: '20px',
+          borderRadius: '8px',
+          boxShadow: '0 2px 8px rgba(0,0,0,0.05)',
+          textAlign: 'center'
+        }}>
+          <div style={{ fontSize: '32px', fontWeight: '700', color: '#5b21b6' }}>
+            {stats.total_videos}
+          </div>
+          <p style={{ color: '#666', margin: '5px 0 0 0', fontSize: '14px' }}>Videos Uploaded</p>
+        </div>
+        <div style={{
+          background: 'white',
+          padding: '20px',
+          borderRadius: '8px',
+          boxShadow: '0 2px 8px rgba(0,0,0,0.05)',
+          textAlign: 'center'
+        }}>
+          <div style={{ fontSize: '32px', fontWeight: '700', color: '#5b21b6' }}>
+            {stats.total_captions}
+          </div>
+          <p style={{ color: '#666', margin: '5px 0 0 0', fontSize: '14px' }}>Captions Generated</p>
+        </div>
+        {Object.entries(stats.platform_breakdown).map(([platform, count]) => (
+          <div key={platform} style={{
+            background: 'white',
+            padding: '20px',
+            borderRadius: '8px',
+            boxShadow: '0 2px 8px rgba(0,0,0,0.05)',
+            textAlign: 'center'
+          }}>
+            <div style={{ fontSize: '20px', fontWeight: '700', color: '#5b21b6' }}>
+              {count}
+            </div>
+            <p style={{ color: '#666', margin: '5px 0 0 0', fontSize: '12px', textTransform: 'capitalize' }}>
+              {platform}
+            </p>
+          </div>
+        ))}
       </div>
 
       <div className="video-upload">
