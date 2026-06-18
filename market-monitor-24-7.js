@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 
 /**
- * 🔥 REAL-TIME MARKET MONITOR - SENDS ALERTS EVERY 5 MINUTES
- * Uses working APIs, sends actual market data alerts constantly
+ * 🔥 REAL MARKET DATA ALERTS - NO BULLSHIT
+ * Uses verified market data from CoinGecko/Alternative.me
+ * Every alert backed by real data with links
  */
 
 const axios = require('axios');
@@ -13,174 +14,222 @@ require('dotenv').config();
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '8676839503:AAH3wz-_zwO6IHaXoPuxL5u0MaDZ0Zi_Z7s';
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID || '6470474178';
 
-const STATE_FILE = path.join(__dirname, '.monitor-state.json');
-let state = {
-  lastPrices: {},
-  lastFng: 0,
-  alertCount: 0
-};
+const CACHE_FILE = path.join(__dirname, '.alerts-sent.json');
+let alertsSent = { prices: {}, indices: {} };
 
-function loadState() {
+function loadCache() {
   try {
-    if (fs.existsSync(STATE_FILE)) {
-      state = { ...state, ...JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')) };
+    if (fs.existsSync(CACHE_FILE)) {
+      alertsSent = JSON.parse(fs.readFileSync(CACHE_FILE, 'utf8'));
     }
   } catch (e) {}
 }
 
-function saveState() {
+function saveCache() {
   try {
-    fs.writeFileSync(STATE_FILE, JSON.stringify(state));
+    fs.writeFileSync(CACHE_FILE, JSON.stringify(alertsSent));
   } catch (e) {}
 }
 
-async function sendAlert(title, body, emoji = '📊') {
+async function sendAlert(title, body, link, emoji = '📊') {
   try {
+    const message = `${emoji} <b>${title}</b>\n\n${body}\n\n<a href="${link}">🔗 View on market data</a>`;
+
     await axios.post(
       `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`,
       {
         chat_id: TELEGRAM_CHAT_ID,
-        text: `${emoji} <b>${title}</b>\n\n${body}`,
-        parse_mode: 'HTML'
+        text: message,
+        parse_mode: 'HTML',
+        disable_web_page_preview: true
       },
       { timeout: 10000 }
     );
-    state.alertCount++;
-    console.log(`✅ Alert #${state.alertCount}: ${title.substring(0, 50)}`);
+
+    console.log(`✅ SENT: ${title.substring(0, 60)}`);
     return true;
   } catch (e) {
-    console.error('❌ Alert failed:', e.message);
+    console.error('❌ Send failed:', e.message);
     return false;
   }
 }
 
 async function checkCryptoPrices() {
   try {
-    const coins = ['bitcoin', 'ethereum', 'solana', 'cardano', 'dogecoin'];
+    console.log('💰 Checking real crypto prices...');
+
     const response = await axios.get(
-      `https://api.coingecko.com/api/v3/simple/price?ids=${coins.join(',')}&vs_currencies=usd&include_24hr_change=true`,
-      { timeout: 8000 }
+      'https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=50&sparkline=true&price_change_percentage=1h%2C24h%2C7d',
+      { timeout: 10000 }
     );
 
-    const prices = response.data;
+    const coins = response.data;
 
-    for (const [coin, data] of Object.entries(prices)) {
-      const change = data.usd_24h_change || 0;
-      const price = data.usd;
+    for (const coin of coins.slice(0, 20)) {
+      const change24h = coin.price_change_percentage_24h;
 
-      // Alert on significant moves (>3%)
-      if (Math.abs(change) > 3) {
-        const lastPrice = state.lastPrices[coin];
+      // Alert if >5% move
+      if (Math.abs(change24h) > 5) {
+        const cacheKey = `${coin.id}_${new Date().toDateString()}`;
 
-        // Only alert once per day per coin
-        if (!lastPrice || new Date().toDateString() !== new Date(lastPrice.date).toDateString()) {
-          const direction = change > 0 ? '📈' : '📉';
-          const name = coin.charAt(0).toUpperCase() + coin.slice(1);
+        if (!alertsSent.prices[cacheKey]) {
+          alertsSent.prices[cacheKey] = true;
+
+          const emoji = change24h > 0 ? '📈' : '📉';
+          const marketCap = coin.market_cap ? `\n<b>Market Cap:</b> $${(coin.market_cap / 1e9).toFixed(2)}B` : '';
 
           await sendAlert(
-            `${direction} ${name}: ${change > 0 ? '+' : ''}${change.toFixed(2)}%`,
-            `<b>Price:</b> $${price.toLocaleString(undefined, { maximumFractionDigits: 2 })}
-<b>24h Change:</b> ${change > 0 ? '+' : ''}${change.toFixed(2)}%
-<b>Signal:</b> ${change > 0 ? 'Bullish momentum' : 'Selling pressure'}`,
-            direction
+            `${emoji} ${coin.name}: ${change24h > 0 ? '+' : ''}${change24h.toFixed(2)}%`,
+            `<b>Price:</b> $${coin.current_price?.toLocaleString(undefined, { maximumFractionDigits: 2 }) || 'N/A'}
+<b>24h Change:</b> ${change24h > 0 ? '+' : ''}${change24h.toFixed(2)}%
+<b>7d Change:</b> ${coin.price_change_percentage_7d_in_currency > 0 ? '+' : ''}${coin.price_change_percentage_7d_in_currency?.toFixed(2) || 'N/A'}%${marketCap}`,
+            `https://www.coingecko.com/en/coins/${coin.id}`,
+            emoji
           );
 
-          state.lastPrices[coin] = { price, change, date: new Date().toISOString() };
+          await new Promise(r => setTimeout(r, 500));
         }
       }
     }
   } catch (error) {
-    console.error('Price check failed:', error.message);
+    console.error('❌ Price check failed:', error.message);
   }
 }
 
 async function checkFearGreed() {
   try {
-    const response = await axios.get('https://api.alternative.me/fng/', { timeout: 8000 });
+    console.log('😨 Checking Fear & Greed Index...');
+
+    const response = await axios.get('https://api.alternative.me/fng/', { timeout: 10000 });
     const data = response.data.data?.[0];
 
     if (!data) return;
 
     const value = parseInt(data.value);
-    const sentiment = data.value_classification;
+    const cacheKey = `fng_${new Date().toDateString()}`;
 
     // Alert on extremes
-    if (value < 30 || value > 70) {
-      if (Math.abs(value - state.lastFng) > 10) {
-        const emoji = value < 50 ? '📉' : '📈';
-        const signal = value < 30 ? 'EXTREME FEAR - Buying opportunity' : value > 70 ? 'EXTREME GREED - Take profits' : 'Fear/Greed shift';
+    if ((value < 25 || value > 75) && !alertsSent.indices[cacheKey]) {
+      alertsSent.indices[cacheKey] = true;
 
-        await sendAlert(
-          `Fear & Greed Index: ${value}`,
-          `<b>Sentiment:</b> ${sentiment}
-<b>Signal:</b> ${signal}
-<b>Index:</b> ${value}/100
-
-Market psychology: ${value < 50 ? 'Fearful' : 'Greedy'}`,
-          emoji
-        );
-
-        state.lastFng = value;
-      }
-    }
-  } catch (error) {
-    console.error('Fear/Greed check failed:', error.message);
-  }
-}
-
-async function checkTrending() {
-  try {
-    const response = await axios.get('https://api.coingecko.com/api/v3/search/trending', { timeout: 8000 });
-    const trending = response.data.coins?.slice(0, 5) || [];
-
-    if (trending.length > 0) {
-      const list = trending
-        .map((c, i) => `${i + 1}. <b>${c.item.name}</b> (${c.item.symbol.toUpperCase()})`)
-        .join('\n');
+      const emoji = value < 50 ? '😨' : '🤑';
+      const signal = value < 25 ? 'EXTREME FEAR - historically leads to rallies' : value > 75 ? 'EXTREME GREED - caution advised' : 'Neutral';
 
       await sendAlert(
-        '🔥 Top Trending Coins',
-        `Market favorites gaining attention:\n\n${list}`,
-        '🔥'
+        `Fear & Greed Index: ${value}/100`,
+        `<b>Sentiment:</b> ${data.value_classification}
+<b>Signal:</b> ${signal}
+<b>Historical:</b> ${value < 25 ? 'Past extreme fear often marked bottoms' : 'Extreme greed preceded major corrections'}`,
+        'https://alternative.me/crypto/fear-and-greed-index/',
+        emoji
       );
     }
   } catch (error) {
-    console.error('Trending check failed:', error.message);
+    console.error('❌ Fear/Greed failed:', error.message);
+  }
+}
+
+async function checkTrendingCoins() {
+  try {
+    console.log('🔥 Checking trending coins...');
+
+    const response = await axios.get('https://api.coingecko.com/api/v3/search/trending', { timeout: 10000 });
+    const trending = response.data.coins || [];
+
+    if (trending.length > 0) {
+      const top5 = trending.slice(0, 5);
+      const list = top5
+        .map((c, i) => `${i + 1}. <a href="https://www.coingecko.com/en/coins/${c.item.id}">${c.item.name}</a> (${c.item.symbol.toUpperCase()})`)
+        .join('\n');
+
+      const cacheKey = `trending_${new Date().toDateString()}`;
+
+      if (!alertsSent.indices[cacheKey]) {
+        alertsSent.indices[cacheKey] = true;
+
+        await sendAlert(
+          '🔥 Top 5 Trending Coins Right Now',
+          `Market attention shifting to:\n\n${list}\n\nThese coins gaining real volume and interest.`,
+          'https://www.coingecko.com/en/',
+          '🔥'
+        );
+      }
+    }
+  } catch (error) {
+    console.error('❌ Trending failed:', error.message);
+  }
+}
+
+async function checkVolumeSpikes() {
+  try {
+    console.log('📊 Checking volume spikes...');
+
+    const response = await axios.get(
+      'https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=volume_desc&per_page=10&sparkline=false',
+      { timeout: 10000 }
+    );
+
+    const highVolume = response.data[0];
+
+    if (highVolume) {
+      const volume24h = highVolume.total_volume || 0;
+
+      if (volume24h > 50e9) {
+        const cacheKey = `volume_${new Date().toDateString()}`;
+
+        if (!alertsSent.indices[cacheKey]) {
+          alertsSent.indices[cacheKey] = true;
+
+          await sendAlert(
+            `📊 Massive Trading Volume Alert`,
+            `<b>Top Volume Coin:</b> ${highVolume.name}
+<b>24h Volume:</b> $${(volume24h / 1e9).toFixed(2)}B
+<b>Price:</b> $${highVolume.current_price?.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+<b>Signal:</b> Extreme liquidity and institutional interest`,
+            `https://www.coingecko.com/en/coins/${highVolume.id}`,
+            '📊'
+          );
+        }
+      }
+    }
+  } catch (error) {
+    console.error('❌ Volume check failed:', error.message);
   }
 }
 
 async function runMonitor() {
-  console.log(`\n[${new Date().toLocaleTimeString()}] 🔍 Market check...`);
+  console.log(`\n[${new Date().toLocaleTimeString()}] 🔍 Market scan...`);
 
-  loadState();
+  loadCache();
 
   try {
     await checkCryptoPrices();
-    await new Promise(r => setTimeout(r, 500));
+    await new Promise(r => setTimeout(r, 1000));
 
     await checkFearGreed();
-    await new Promise(r => setTimeout(r, 500));
+    await new Promise(r => setTimeout(r, 1000));
 
-    await checkTrending();
+    await checkTrendingCoins();
+    await new Promise(r => setTimeout(r, 1000));
+
+    await checkVolumeSpikes();
   } catch (error) {
     console.error('Monitor error:', error.message);
   }
 
-  saveState();
+  saveCache();
+  console.log('✅ Scan complete\n');
 }
 
-// Run immediately
+// Run now
 runMonitor();
 
-// Then every 5 minutes
+// Every 5 minutes
 setInterval(runMonitor, 300000);
 
-console.log('✅ MARKET MONITOR ACTIVE');
-console.log('Checking every 5 minutes for:');
-console.log('- Crypto price moves (>3%)');
-console.log('- Fear & Greed extremes');
-console.log('- Trending coins\n');
-console.log('Alerts go to Telegram chat: 6470474178');
+console.log('✅ REAL MARKET DATA MONITOR ACTIVE');
+console.log('Alerts backed by real CoinGecko data with links');
+console.log('Updates every 5 minutes\n');
 
 process.on('uncaughtException', (error) => {
   console.error('Crash:', error.message);
