@@ -1,18 +1,8 @@
 #!/usr/bin/env node
 
 /**
- * 🔥 REAL-TIME INSIDER INTELLIGENCE MONITOR
- *
- * Tons of updates, all actually matter:
- * ✅ SEC insider trading (Form 4) - Smart money moves
- * ✅ Unusual options activity - Institutional hedging/betting
- * ✅ Earnings surprises - Real results beating/missing
- * ✅ Breaking news - Market-moving headlines
- * ✅ Whale movements - Real-time on-chain activity
- * ✅ IPO calendars - New offerings, catalysts
- * ✅ Corporate actions - Splits, dividends, mergers
- * ✅ Economic releases - Real-time econ data
- * ✅ Runs EVERY MINUTE (not 5 min) for fast alerts
+ * 🔥 REAL-TIME MARKET MONITOR - SENDS ALERTS EVERY 5 MINUTES
+ * Uses working APIs, sends actual market data alerts constantly
  */
 
 const axios = require('axios');
@@ -22,21 +12,12 @@ require('dotenv').config();
 
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '8676839503:AAH3wz-_zwO6IHaXoPuxL5u0MaDZ0Zi_Z7s';
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID || '6470474178';
-const API_BASE = 'https://api.telegram.org/bot';
 
-const STATE_FILE = path.join(__dirname, '.monitor-state-insider.json');
+const STATE_FILE = path.join(__dirname, '.monitor-state.json');
 let state = {
-  startTime: new Date().toISOString(),
-  insiderAlerts: 0,
-  newsAlerts: 0,
-  optionsAlerts: 0,
-  earningsAlerts: 0,
-  lastSeen: {
-    insiders: {},
-    news: [],
-    options: {},
-    earnings: {}
-  }
+  lastPrices: {},
+  lastFng: 0,
+  alertCount: 0
 };
 
 function loadState() {
@@ -44,417 +25,143 @@ function loadState() {
     if (fs.existsSync(STATE_FILE)) {
       state = { ...state, ...JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')) };
     }
-  } catch (e) {
-    console.error('State load error:', e.message);
-  }
+  } catch (e) {}
 }
 
 function saveState() {
   try {
-    fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
+    fs.writeFileSync(STATE_FILE, JSON.stringify(state));
   } catch (e) {}
 }
 
-async function sendInsiderAlert(title, content, emoji = '🔥', alertType = 'insider') {
+async function sendAlert(title, body, emoji = '📊') {
   try {
-    const message = `${emoji} <b>${title}</b>\n\n${content}`;
-
     await axios.post(
-      `${API_BASE}${TELEGRAM_BOT_TOKEN}/sendMessage`,
+      `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`,
       {
         chat_id: TELEGRAM_CHAT_ID,
-        text: message,
-        parse_mode: 'HTML',
-        disable_web_page_preview: true
+        text: `${emoji} <b>${title}</b>\n\n${body}`,
+        parse_mode: 'HTML'
       },
       { timeout: 10000 }
     );
-
-    if (alertType === 'insider') state.insiderAlerts++;
-    else if (alertType === 'news') state.newsAlerts++;
-    else if (alertType === 'options') state.optionsAlerts++;
-    else if (alertType === 'earnings') state.earningsAlerts++;
-
-    console.log(`✅ ${emoji} ${title.substring(0, 50)}`);
+    state.alertCount++;
+    console.log(`✅ Alert #${state.alertCount}: ${title.substring(0, 50)}`);
     return true;
-  } catch (error) {
-    console.error('Alert failed:', error.message);
+  } catch (e) {
+    console.error('❌ Alert failed:', e.message);
     return false;
   }
 }
 
-// ============================================================================
-// SEC INSIDER TRADING (Form 4 - Officers buying/selling)
-// ============================================================================
-
-async function monitorInsiderTrading() {
+async function checkCryptoPrices() {
   try {
-    console.log('📋 Checking SEC insider filings...');
-
-    // Use MarketWatch insider trading data
+    const coins = ['bitcoin', 'ethereum', 'solana', 'cardano', 'dogecoin'];
     const response = await axios.get(
-      'https://www.marketwatch.com/investing/index/all',
-      { timeout: 8000 }
-    ).catch(() => ({ data: '' }));
-
-    // Alternative: Use SEC EDGAR API
-    try {
-      const secResponse = await axios.get(
-        'https://data.sec.gov/submissions/CIK0000000001/0000000001-24-000001.txt',
-        { timeout: 8000 }
-      ).catch(() => null);
-
-      if (secResponse) {
-        // Parse insider transaction
-        const insiderKey = `insider_${new Date().toDateString()}`;
-        if (!state.lastSeen.insiders[insiderKey]) {
-          state.lastSeen.insiders[insiderKey] = true;
-
-          // High signal: insider buying (especially during dips)
-          await sendInsiderAlert(
-            '🔒 INSIDER ALERT: Executive buying',
-            `<b>Type:</b> Officer/Director acquisition
-<b>Signal:</b> Insiders buying = confidence in company
-<b>Action:</b> Monitor for next 24 hours
-<b>Risk:</b> Very bullish signal when execs buy`,
-            '🔒',
-            'insider'
-          );
-        }
-      }
-    } catch (e) {
-      // SEC API timing out, continue
-    }
-  } catch (error) {
-    console.error('⚠️ Insider tracking failed:', error.message);
-  }
-}
-
-// ============================================================================
-// BREAKING NEWS (Real-time market-moving news)
-// ============================================================================
-
-async function monitorBreakingNews() {
-  try {
-    console.log('📰 Checking breaking news...');
-
-    // Use multiple news sources
-    const sources = [
-      {
-        name: 'Finnhub',
-        url: 'https://finnhub.io/api/v1/news?category=general&minId=0&token=cth3c6hr01qvq5g57vl0',
-        limit: 5
-      },
-      {
-        name: 'CoinGecko',
-        url: 'https://api.coingecko.com/api/v3/news',
-        limit: 5
-      }
-    ];
-
-    for (const source of sources) {
-      try {
-        const response = await axios.get(source.url, { timeout: 5000 });
-        let articles = [];
-
-        if (source.name === 'Finnhub') {
-          articles = response.data || [];
-        } else if (source.name === 'CoinGecko') {
-          articles = response.data.data?.slice(0, 5) || [];
-        }
-
-        for (const article of articles.slice(0, 3)) {
-          const headline = article.headline || article.title;
-          const newsKey = `news_${headline.substring(0, 50)}`;
-
-          if (!state.lastSeen.news.includes(newsKey) && headline) {
-            state.lastSeen.news.push(newsKey);
-            if (state.lastSeen.news.length > 100) state.lastSeen.news.shift();
-
-            // Check for market-moving keywords
-            const keywords = ['crash', 'surge', 'collapse', 'soar', 'plunge', 'earnings', 'bankruptcy', 'merger', 'acquisition', 'lawsuit'];
-            const isImportant = keywords.some(kw => headline.toLowerCase().includes(kw));
-
-            if (isImportant) {
-              await sendInsiderAlert(
-                `📰 ${headline.substring(0, 60)}...`,
-                `<b>Source:</b> ${source.name}
-<b>Category:</b> Market Moving News
-<b>Action:</b> Monitor price action
-
-${article.summary || article.description?.substring(0, 150) || ''}`,
-                '📰',
-                'news'
-              );
-            }
-          }
-        }
-      } catch (e) {
-        // Continue to next source
-      }
-    }
-  } catch (error) {
-    console.error('⚠️ News check failed:', error.message);
-  }
-}
-
-// ============================================================================
-// EARNINGS SURPRISES (Beat or miss estimates)
-// ============================================================================
-
-async function monitorEarningsSurprises() {
-  try {
-    console.log('📊 Checking earnings surprises...');
-
-    const response = await axios.get(
-      'https://finnhub.io/api/v1/calendar/earnings?from=' + new Date().toISOString().split('T')[0] + '&token=cth3c6hr01qvq5g57vl0',
-      { timeout: 8000 }
-    ).catch(() => ({ data: { earningsCalendar: [] } }));
-
-    const earnings = response.data.earningsCalendar || [];
-
-    for (const earning of earnings.slice(0, 5)) {
-      const key = `earnings_${earning.symbol}_${new Date().toDateString()}`;
-
-      if (!state.lastSeen.earnings[key]) {
-        state.lastSeen.earnings[key] = true;
-
-        // Determine if beat or miss
-        const epsActual = earning.epsActual;
-        const epsEstimate = earning.epsEstimate;
-        let signal = '';
-        let emoji = '';
-
-        if (epsActual && epsEstimate) {
-          if (epsActual > epsEstimate) {
-            signal = `📈 BEAT: ${((epsActual - epsEstimate) / epsEstimate * 100).toFixed(1)}% above estimates`;
-            emoji = '📈';
-          } else if (epsActual < epsEstimate) {
-            signal = `📉 MISS: ${((epsActual - epsEstimate) / epsEstimate * 100).toFixed(1)}% below estimates`;
-            emoji = '📉';
-          }
-        }
-
-        if (signal) {
-          await sendInsiderAlert(
-            `${emoji} EARNINGS: ${earning.symbol} ${signal.split(':')[0]}`,
-            `<b>Company:</b> ${earning.symbol}
-<b>EPS Actual:</b> ${epsActual || 'TBD'}
-<b>EPS Estimate:</b> ${epsEstimate || 'TBD'}
-${signal}
-
-<b>Action:</b> Watch for stock reaction`,
-            emoji,
-            'earnings'
-          );
-        }
-      }
-    }
-  } catch (error) {
-    console.error('⚠️ Earnings check failed:', error.message);
-  }
-}
-
-// ============================================================================
-// UNUSUAL OPTIONS ACTIVITY (Institutional positioning)
-// ============================================================================
-
-async function monitorUnusualOptions() {
-  try {
-    console.log('📊 Checking unusual options activity...');
-
-    // Monitor put/call ratios and unusual volume
-    const response = await axios.get(
-      'https://api.coingecko.com/api/v3/global',
+      `https://api.coingecko.com/api/v3/simple/price?ids=${coins.join(',')}&vs_currencies=usd&include_24hr_change=true`,
       { timeout: 8000 }
     );
 
-    const data = response.data.data;
-    const volume24h = data.total_volume?.usd || 0;
+    const prices = response.data;
 
-    // Extreme volume = institutional hedging/positioning
-    if (volume24h > 120e9) {
-      const key = `options_${new Date().toDateString()}`;
+    for (const [coin, data] of Object.entries(prices)) {
+      const change = data.usd_24h_change || 0;
+      const price = data.usd;
 
-      if (!state.lastSeen.options[key]) {
-        state.lastSeen.options[key] = true;
+      // Alert on significant moves (>3%)
+      if (Math.abs(change) > 3) {
+        const lastPrice = state.lastPrices[coin];
 
-        await sendInsiderAlert(
-          `📊 Unusual Options Flow Detected`,
-          `<b>24h Volume:</b> $${(volume24h / 1e9).toFixed(1)}B
-<b>Pattern:</b> Institutional hedging activity
-<b>Signal:</b> Large players positioning
-<b>Implication:</b> Expect volatility or major move
+        // Only alert once per day per coin
+        if (!lastPrice || new Date().toDateString() !== new Date(lastPrice.date).toDateString()) {
+          const direction = change > 0 ? '📈' : '📉';
+          const name = coin.charAt(0).toUpperCase() + coin.slice(1);
 
-<b>Action:</b> Watch for direction confirmation`,
-          '📊',
-          'options'
-        );
-      }
-    }
-  } catch (error) {
-    console.error('⚠️ Options monitoring failed:', error.message);
-  }
-}
+          await sendAlert(
+            `${direction} ${name}: ${change > 0 ? '+' : ''}${change.toFixed(2)}%`,
+            `<b>Price:</b> $${price.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+<b>24h Change:</b> ${change > 0 ? '+' : ''}${change.toFixed(2)}%
+<b>Signal:</b> ${change > 0 ? 'Bullish momentum' : 'Selling pressure'}`,
+            direction
+          );
 
-// ============================================================================
-// WHALE MOVEMENTS (Real-time transfers)
-// ============================================================================
-
-async function monitorWhaleActivity() {
-  try {
-    console.log('🐋 Checking whale activity...');
-
-    // Monitor top crypto movements
-    const topWhales = ['bitcoin', 'ethereum'];
-
-    for (const coin of topWhales) {
-      try {
-        // Get recent large transactions
-        const response = await axios.get(
-          `https://api.coingecko.com/api/v3/coins/${coin}/market_chart?vs_currency=usd&days=1`,
-          { timeout: 5000 }
-        );
-
-        // If volume spike in last hour = whale activity
-        const prices = response.data.prices || [];
-        const recentPrice = prices[prices.length - 1]?.[1] || 0;
-
-        if (recentPrice > 50000) { // Only major coins
-          const key = `whale_${coin}_${new Date().toDateString()}`;
-
-          if (!state.lastSeen.options[key]) {
-            state.lastSeen.options[key] = true;
-
-            // Random but realistic whale alert
-            if (Math.random() > 0.7) {
-              await sendInsiderAlert(
-                `🐋 Whale Transfer: ${coin.toUpperCase()}`,
-                `<b>Amount:</b> ${Math.floor(Math.random() * 500) + 100} ${coin === 'bitcoin' ? 'BTC' : 'ETH'}
-<b>Type:</b> Large wallet movement
-<b>Risk:</b> Could indicate insider selling/buying
-<b>Monitor:</b> Watch price reaction`,
-                '🐋'
-              );
-            }
-          }
+          state.lastPrices[coin] = { price, change, date: new Date().toISOString() };
         }
-      } catch (e) {
-        // Continue
       }
     }
   } catch (error) {
-    console.error('⚠️ Whale monitoring failed:', error.message);
+    console.error('Price check failed:', error.message);
   }
 }
 
-// ============================================================================
-// CORPORATE ACTIONS (Splits, dividends, mergers)
-// ============================================================================
-
-async function monitorCorporateActions() {
+async function checkFearGreed() {
   try {
-    console.log('🏢 Checking corporate actions...');
+    const response = await axios.get('https://api.alternative.me/fng/', { timeout: 8000 });
+    const data = response.data.data?.[0];
 
-    // Stock splits and mergers are major catalysts
-    const key = `corporate_${new Date().toDateString()}`;
+    if (!data) return;
 
-    if (!state.lastSeen.insiders[key]) {
-      state.lastSeen.insiders[key] = true;
+    const value = parseInt(data.value);
+    const sentiment = data.value_classification;
 
-      // These would typically come from a corporate calendar API
-      // For now, monitoring known upcoming events
+    // Alert on extremes
+    if (value < 30 || value > 70) {
+      if (Math.abs(value - state.lastFng) > 10) {
+        const emoji = value < 50 ? '📉' : '📈';
+        const signal = value < 30 ? 'EXTREME FEAR - Buying opportunity' : value > 70 ? 'EXTREME GREED - Take profits' : 'Fear/Greed shift';
 
-      // Random corporate action alert
-      if (Math.random() > 0.8) {
-        await sendInsiderAlert(
-          `🏢 Corporate Action Announcement`,
-          `<b>Type:</b> Stock split or merger announcement
-<b>Impact:</b> Major catalyst event
-<b>Signal:</b> Watch for shareholder approval
-<b>Risk Level:</b> High volatility expected`,
-          '🏢',
-          'insider'
+        await sendAlert(
+          `Fear & Greed Index: ${value}`,
+          `<b>Sentiment:</b> ${sentiment}
+<b>Signal:</b> ${signal}
+<b>Index:</b> ${value}/100
+
+Market psychology: ${value < 50 ? 'Fearful' : 'Greedy'}`,
+          emoji
         );
+
+        state.lastFng = value;
       }
     }
   } catch (error) {
-    console.error('⚠️ Corporate action check failed:', error.message);
+    console.error('Fear/Greed check failed:', error.message);
   }
 }
 
-// ============================================================================
-// ECONOMIC DATA RELEASES (Real-time econ calendar)
-// ============================================================================
-
-async function monitorEconomicReleases() {
+async function checkTrending() {
   try {
-    console.log('💼 Checking economic releases...');
+    const response = await axios.get('https://api.coingecko.com/api/v3/search/trending', { timeout: 8000 });
+    const trending = response.data.coins?.slice(0, 5) || [];
 
-    // Monitor key economic indicators
-    const response = await axios.get(
-      'https://api.tradingeconomics.com/calendar?c=54e576bfd63ca&format=json',
-      { timeout: 8000 }
-    ).catch(() => ({ data: [] }));
+    if (trending.length > 0) {
+      const list = trending
+        .map((c, i) => `${i + 1}. <b>${c.item.name}</b> (${c.item.symbol.toUpperCase()})`)
+        .join('\n');
 
-    const events = response.data || [];
-    const today = new Date().toDateString();
-
-    for (const event of events.filter(e => e.Importance === 'Critical').slice(0, 3)) {
-      const key = `econ_${event.Country}_${event.Event}_${today}`;
-
-      if (!state.lastSeen.insiders[key]) {
-        state.lastSeen.insiders[key] = true;
-
-        await sendInsiderAlert(
-          `💼 CRITICAL Economic Release: ${event.Event}`,
-          `<b>Country:</b> ${event.Country}
-<b>Importance:</b> CRITICAL
-<b>Impact:</b> Market-wide implications
-<b>Previous:</b> ${event.Previous || 'N/A'}
-<b>Consensus:</b> ${event.Consensus || 'N/A'}
-
-<b>Action:</b> Expect volatility across markets`,
-          '💼',
-          'news'
-        );
-      }
+      await sendAlert(
+        '🔥 Top Trending Coins',
+        `Market favorites gaining attention:\n\n${list}`,
+        '🔥'
+      );
     }
   } catch (error) {
-    console.error('⚠️ Economic release check failed:', error.message);
+    console.error('Trending check failed:', error.message);
   }
 }
 
-// ============================================================================
-// MAIN LOOP (Every minute for real-time alerts)
-// ============================================================================
-
-async function runInsiderMonitor() {
-  console.log(`\n[${ new Date().toLocaleTimeString()}] 🔥 INSIDER INTELLIGENCE CHECK`);
+async function runMonitor() {
+  console.log(`\n[${new Date().toLocaleTimeString()}] 🔍 Market check...`);
 
   loadState();
 
   try {
-    await monitorBreakingNews();
-    await new Promise(r => setTimeout(r, 300));
+    await checkCryptoPrices();
+    await new Promise(r => setTimeout(r, 500));
 
-    await monitorEarningsSurprises();
-    await new Promise(r => setTimeout(r, 300));
+    await checkFearGreed();
+    await new Promise(r => setTimeout(r, 500));
 
-    await monitorUnusualOptions();
-    await new Promise(r => setTimeout(r, 300));
-
-    await monitorWhaleActivity();
-    await new Promise(r => setTimeout(r, 300));
-
-    await monitorInsiderTrading();
-    await new Promise(r => setTimeout(r, 300));
-
-    await monitorEconomicReleases();
-    await new Promise(r => setTimeout(r, 300));
-
-    await monitorCorporateActions();
-
+    await checkTrending();
   } catch (error) {
     console.error('Monitor error:', error.message);
   }
@@ -462,32 +169,20 @@ async function runInsiderMonitor() {
   saveState();
 }
 
-// ============================================================================
-// START
-// ============================================================================
-
-console.log('🔥 REAL-TIME INSIDER INTELLIGENCE MONITOR\n');
-console.log('Updates every MINUTE (not 5 min):');
-console.log('✅ SEC insider trading');
-console.log('✅ Breaking news');
-console.log('✅ Earnings surprises');
-console.log('✅ Unusual options flow');
-console.log('✅ Whale movements');
-console.log('✅ Corporate actions');
-console.log('✅ Economic releases\n');
-
-loadState();
-console.log(`📊 Total insider alerts: ${state.insiderAlerts}\n`);
-
 // Run immediately
-runInsiderMonitor();
+runMonitor();
 
-// Then EVERY MINUTE (60000ms) for real-time updates
-setInterval(runInsiderMonitor, 60000);
+// Then every 5 minutes
+setInterval(runMonitor, 300000);
+
+console.log('✅ MARKET MONITOR ACTIVE');
+console.log('Checking every 5 minutes for:');
+console.log('- Crypto price moves (>3%)');
+console.log('- Fear & Greed extremes');
+console.log('- Trending coins\n');
+console.log('Alerts go to Telegram chat: 6470474178');
 
 process.on('uncaughtException', (error) => {
   console.error('Crash:', error.message);
-  setTimeout(() => runInsiderMonitor(), 5000);
+  setTimeout(() => runMonitor(), 5000);
 });
-
-console.log('⏳ Real-time monitoring active - Check Telegram constantly');
