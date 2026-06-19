@@ -1,0 +1,20 @@
+[Unit]
+Description=Telegram Stock Update Bot
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/home/user/claude-code
+Environment="TELEGRAM_BOT_TOKEN=YOUR_BOT_TOKEN"
+Environment="TELEGRAM_CHAT_ID=YOUR_CHAT_ID"
+Environment="STOCKS_TO_MONITOR=AAPL,GOOGL,MSFT,AMZN,NVDA"
+Environment="SCAN_INTERVAL_SECONDS=300"
+ExecStart=/usr/bin/python3 /home/user/claude-code/telegram_stock_bot.py
+Restart=always
+RestartSec=10
+StandardOutput=append:/var/log/telegram-stock-bot.log
+StandardError=append:/var/log/telegram-stock-bot.log
+
+[Install]
+WantedBy=multi-user.target
