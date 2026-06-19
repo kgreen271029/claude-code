@@ -42,6 +42,8 @@ function pruneCache() {
   saveCache();
 }
 
+let alertCount = 0;
+
 async function tg(title, body, link, emoji) {
   const linkPart = link ? `\n\n<a href="${link}">🔗 Read more</a>` : '';
   const text = `${emoji} <b>${title}</b>\n\n${body}${linkPart}`;
@@ -49,6 +51,7 @@ async function tg(title, body, link, emoji) {
     await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
       chat_id: CHAT_ID, text, parse_mode: 'HTML', disable_web_page_preview: true
     }, { timeout: 12000 });
+    alertCount++;
     console.log(`✅ ${title.substring(0, 70)}`);
   } catch(e) {
     console.error(`❌ TG failed: ${e.response?.data?.description || e.message}`);
@@ -335,13 +338,242 @@ async function checkTreasuryYields() {
   } catch(e) { console.error('Treasury yields failed:', e.message); }
 }
 
+// ─── YAHOO FINANCE HELPER (free, no key) ─────────────────────────────────────
+async function yfQuote(symbol) {
+  const res = await axios.get(
+    `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}`,
+    { timeout: 12000, headers: { 'User-Agent': 'Mozilla/5.0 MarketBot/1.0' } }
+  );
+  const m = res.data?.chart?.result?.[0]?.meta;
+  if (!m) return null;
+  const price = m.regularMarketPrice;
+  const prev  = m.chartPreviousClose || m.previousClose;
+  const change = prev ? ((price - prev) / prev) * 100 : 0;
+  return { price, prev, change, symbol };
+}
+
+// ─── 10. STOCK INDICES (S&P, Nasdaq, Dow, VIX, Russell) ──────────────────────
+async function checkStockIndices() {
+  console.log('📊 Stock indices...');
+  const INDICES = [
+    { sym: '^GSPC', name: 'S&P 500' },
+    { sym: '^IXIC', name: 'Nasdaq' },
+    { sym: '^DJI',  name: 'Dow Jones' },
+    { sym: '^RUT',  name: 'Russell 2000' },
+    { sym: '^VIX',  name: 'VIX (Fear Index)' },
+  ];
+  const key = `indices_${new Date().toDateString()}_${new Date().getHours()}`;
+  if (seen(key)) return;
+  try {
+    const lines = [];
+    for (const idx of INDICES) {
+      const q = await yfQuote(idx.sym);
+      if (!q) continue;
+      const e = q.change > 0 ? '🟢' : '🔴';
+      lines.push(`${e} <b>${idx.name}:</b> ${q.price?.toLocaleString(undefined,{maximumFractionDigits:2})} (${q.change > 0 ? '+' : ''}${q.change.toFixed(2)}%)`);
+      await sleep(300);
+    }
+    if (lines.length) {
+      markSeen(key);
+      await tg('US Market Indices', lines.join('\n'),
+        'https://finance.yahoo.com/', '📊');
+    }
+  } catch(e) { console.error('Indices:', e.message); }
+}
+
+// ─── 11. BIG STOCK MOVERS (mega-cap watchlist) ───────────────────────────────
+async function checkStockMovers() {
+  console.log('🚀 Stock movers...');
+  const STOCKS = ['AAPL','MSFT','NVDA','TSLA','AMZN','GOOGL','META','AMD','NFLX','COIN','PLTR','MSTR','GME','AMC'];
+  for (const sym of STOCKS) {
+    try {
+      const q = await yfQuote(sym);
+      if (!q || !q.change) continue;
+      const key = `stock_${sym}_${new Date().toDateString()}`;
+      if (Math.abs(q.change) > 4 && !seen(key)) {
+        markSeen(key);
+        const e = q.change > 0 ? '📈' : '📉';
+        await tg(
+          `${sym} ${q.change > 0 ? '+' : ''}${q.change.toFixed(2)}%`,
+          `<b>Price:</b> $${q.price?.toLocaleString(undefined,{maximumFractionDigits:2})}\n<b>Change:</b> ${q.change > 0 ? '+' : ''}${q.change.toFixed(2)}%\n<b>Prev Close:</b> $${q.prev?.toFixed(2)}`,
+          `https://finance.yahoo.com/quote/${sym}`, e
+        );
+        await sleep(500);
+      }
+    } catch(e) { console.error(`Stock ${sym}:`, e.message); }
+    await sleep(200);
+  }
+}
+
+// ─── 12. COMMODITIES (Gold, Oil, Silver, NatGas) ─────────────────────────────
+async function checkCommodities() {
+  console.log('🛢️ Commodities...');
+  const COMM = [
+    { sym: 'GC=F', name: 'Gold' },
+    { sym: 'SI=F', name: 'Silver' },
+    { sym: 'CL=F', name: 'Crude Oil' },
+    { sym: 'NG=F', name: 'Natural Gas' },
+  ];
+  const key = `comm_${new Date().toDateString()}_${new Date().getHours()}`;
+  if (seen(key)) return;
+  try {
+    const lines = [];
+    for (const c of COMM) {
+      const q = await yfQuote(c.sym);
+      if (!q) continue;
+      const e = q.change > 0 ? '🟢' : '🔴';
+      lines.push(`${e} <b>${c.name}:</b> $${q.price?.toFixed(2)} (${q.change > 0 ? '+' : ''}${q.change.toFixed(2)}%)`);
+      await sleep(300);
+    }
+    if (lines.length) {
+      markSeen(key);
+      await tg('Commodities', lines.join('\n'), 'https://finance.yahoo.com/commodities/', '🛢️');
+    }
+  } catch(e) { console.error('Commodities:', e.message); }
+}
+
+// ─── 13. FOREX & DOLLAR INDEX ────────────────────────────────────────────────
+async function checkForex() {
+  console.log('💵 Forex / Dollar...');
+  const FX = [
+    { sym: 'DX-Y.NYB', name: 'US Dollar Index (DXY)' },
+    { sym: 'EURUSD=X', name: 'EUR/USD' },
+    { sym: 'USDJPY=X', name: 'USD/JPY' },
+    { sym: 'GBPUSD=X', name: 'GBP/USD' },
+  ];
+  const key = `forex_${new Date().toDateString()}_${new Date().getHours()}`;
+  if (seen(key)) return;
+  try {
+    const lines = [];
+    for (const f of FX) {
+      const q = await yfQuote(f.sym);
+      if (!q) continue;
+      const e = q.change > 0 ? '🟢' : '🔴';
+      lines.push(`${e} <b>${f.name}:</b> ${q.price?.toFixed(3)} (${q.change > 0 ? '+' : ''}${q.change.toFixed(2)}%)`);
+      await sleep(300);
+    }
+    if (lines.length) {
+      markSeen(key);
+      await tg('Forex & Dollar Index', lines.join('\n'), 'https://finance.yahoo.com/currencies/', '💵');
+    }
+  } catch(e) { console.error('Forex:', e.message); }
+}
+
+// ─── 14. CRYPTO TOP GAINERS / LOSERS ─────────────────────────────────────────
+async function checkGainersLosers() {
+  console.log('🎢 Crypto gainers/losers...');
+  const key = `gl_${new Date().toDateString()}_${new Date().getHours()}`;
+  if (seen(key)) return;
+  try {
+    const res = await axios.get(
+      'https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=250&price_change_percentage=24h',
+      { timeout: 15000 }
+    );
+    const coins = res.data.filter(c => c.price_change_percentage_24h != null && c.market_cap > 50e6);
+    const sorted = [...coins].sort((a,b) => b.price_change_percentage_24h - a.price_change_percentage_24h);
+    const gainers = sorted.slice(0, 5);
+    const losers  = sorted.slice(-5).reverse();
+    if (gainers.length) {
+      markSeen(key);
+      const g = gainers.map(c => `📈 <b>${c.symbol.toUpperCase()}</b> +${c.price_change_percentage_24h.toFixed(1)}% ($${c.current_price?.toLocaleString()})`).join('\n');
+      const l = losers.map(c => `📉 <b>${c.symbol.toUpperCase()}</b> ${c.price_change_percentage_24h.toFixed(1)}% ($${c.current_price?.toLocaleString()})`).join('\n');
+      await tg('Crypto Top Movers (24h)',
+        `<b>🔥 TOP GAINERS</b>\n${g}\n\n<b>🩸 TOP LOSERS</b>\n${l}`,
+        'https://www.coingecko.com/en/highlights', '🎢');
+    }
+  } catch(e) { console.error('Gainers/losers:', e.message); }
+}
+
+// ─── 15. HOT CRYPTO SECTORS (categories) ─────────────────────────────────────
+async function checkCryptoSectors() {
+  console.log('🏷️ Crypto sectors...');
+  const key = `sectors_${new Date().toDateString()}_${new Date().getHours()}`;
+  if (seen(key)) return;
+  try {
+    const res = await axios.get('https://api.coingecko.com/api/v3/coins/categories?order=market_cap_change_24h_desc', { timeout: 12000 });
+    const cats = (res.data || []).filter(c => c.market_cap_change_24h != null).slice(0, 5);
+    if (cats.length) {
+      markSeen(key);
+      const list = cats.map((c,i) => `${i+1}. <b>${c.name}</b> ${c.market_cap_change_24h > 0 ? '+' : ''}${c.market_cap_change_24h.toFixed(1)}%`).join('\n');
+      await tg('Hottest Crypto Sectors (24h)',
+        `Money rotating into:\n\n${list}`,
+        'https://www.coingecko.com/en/categories', '🏷️');
+    }
+  } catch(e) { console.error('Sectors:', e.message); }
+}
+
+// ─── 16. ETHEREUM GAS FEES ───────────────────────────────────────────────────
+async function checkGasFees() {
+  console.log('⛽ ETH gas...');
+  const key = `gas_${new Date().toDateString()}_${new Date().getHours()}`;
+  if (seen(key)) return;
+  try {
+    const res = await axios.get('https://api.coingecko.com/api/v3/coins/ethereum', { timeout: 10000 }).catch(()=>null);
+    // Use Etherscan-free gas oracle alternative via blocknative public endpoint
+    const gasRes = await axios.get('https://ethgasstation.info/api/ethgasAPI.json', { timeout: 8000 }).catch(()=>null);
+    if (gasRes?.data) {
+      markSeen(key);
+      const d = gasRes.data;
+      await tg('Ethereum Gas Fees',
+        `<b>Fast:</b> ${(d.fast/10).toFixed(0)} gwei\n<b>Standard:</b> ${(d.average/10).toFixed(0)} gwei\n<b>Slow:</b> ${(d.safeLow/10).toFixed(0)} gwei\n<b>Signal:</b> ${d.average/10 > 50 ? '⚠️ High activity / congestion' : '✅ Network calm'}`,
+        'https://etherscan.io/gastracker', '⛽');
+    }
+  } catch(e) { console.error('Gas:', e.message); }
+}
+
+// ─── 17. CRYPTO DERIVATIVES / OPEN INTEREST ──────────────────────────────────
+async function checkDerivatives() {
+  console.log('📐 Derivatives...');
+  const key = `deriv_${new Date().toDateString()}_${new Date().getHours()}`;
+  if (seen(key)) return;
+  try {
+    const res = await axios.get('https://api.coingecko.com/api/v3/derivatives/exchanges?order=open_interest_btc_desc&per_page=5', { timeout: 12000 });
+    const ex = res.data || [];
+    if (ex.length) {
+      markSeen(key);
+      const list = ex.map((e,i) => `${i+1}. <b>${e.name}</b> — OI: ${e.open_interest_btc?.toLocaleString(undefined,{maximumFractionDigits:0})} BTC, Vol: ${(e.trade_volume_24h_btc/1000).toFixed(0)}K BTC`).join('\n');
+      await tg('Crypto Derivatives — Open Interest',
+        `Largest futures exchanges by open interest:\n\n${list}\n\nHigh OI = leverage building, watch for liquidation cascades.`,
+        'https://www.coingecko.com/en/derivatives', '📐');
+    }
+  } catch(e) { console.error('Derivatives:', e.message); }
+}
+
+// ─── 18. CRYPTO EXCHANGE LISTINGS / NEWS (Binance, Coinbase) ─────────────────
+async function checkExchangeNews() {
+  console.log('🏦 Exchange announcements...');
+  const FEEDS = [
+    { name: 'Coindesk', url: 'https://www.coindesk.com/arc/outboundfeeds/rss/' },
+    { name: 'Cointelegraph', url: 'https://cointelegraph.com/rss' },
+    { name: 'Decrypt', url: 'https://decrypt.co/feed' },
+  ];
+  const KW = ['binance','coinbase','listing','lists','delisting','etf','sec','hack','exploit','launch','airdrop','upgrade','halving','partnership'];
+  for (const feed of FEEDS) {
+    try {
+      const items = await fetchRSS(feed.url);
+      for (const item of items.slice(0, 8)) {
+        const tl = item.title.toLowerCase();
+        if (!KW.some(k => tl.includes(k))) continue;
+        const key = `exnews_${item.title.substring(0,60).replace(/\W/g,'_')}`;
+        if (seen(key)) continue;
+        markSeen(key);
+        await tg(item.title.substring(0,100),
+          (item.desc || 'Crypto news').substring(0,220), item.link, '🏦');
+        await sleep(700);
+      }
+    } catch(e) { console.error(`ExNews ${feed.name}:`, e.message); }
+  }
+}
+
 // ─── MAIN LOOP ────────────────────────────────────────────────────────────────
 async function run() {
   console.log(`\n${'='.repeat(60)}\n[${new Date().toISOString()}] MARKET MONITOR CYCLE\n${'='.repeat(60)}`);
   loadCache();
   pruneCache();
 
-  // Run all checks — if one fails, others still run
+  // Run all checks — if one fails, others still run.
+  // Each check fires its OWN alerts the moment it finds something,
+  // so a single cycle can send many alerts (or zero if nothing's new).
   const checks = [
     checkCryptoPrices,
     checkFearGreed,
@@ -352,14 +584,41 @@ async function run() {
     checkRedditSentiment,
     checkInsiderTrading,
     checkTreasuryYields,
+    checkStockIndices,
+    checkStockMovers,
+    checkCommodities,
+    checkForex,
+    checkGainersLosers,
+    checkCryptoSectors,
+    checkGasFees,
+    checkDerivatives,
+    checkExchangeNews,
   ];
 
+  let alertsThisCycle = 0;
+  const before = alertCount;
   for (const check of checks) {
     try { await check(); } catch(e) { console.error(`Check failed: ${e.message}`); }
-    await sleep(500);
+    await sleep(400);
+  }
+  alertsThisCycle = alertCount - before;
+
+  // Guarantee at least ONE message every cycle (every 5 min minimum),
+  // but checks above can and do send many more when news breaks.
+  if (alertsThisCycle === 0) {
+    try {
+      const res = await axios.get(
+        'https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum&vs_currencies=usd&include_24hr_change=true',
+        { timeout: 10000 }
+      );
+      const b = res.data.bitcoin, e = res.data.ethereum;
+      await tg('Market Pulse — All Quiet',
+        `No major moves this cycle. Current levels:\n\n<b>BTC:</b> $${b.usd?.toLocaleString()} (${b.usd_24h_change > 0 ? '+' : ''}${b.usd_24h_change?.toFixed(2)}%)\n<b>ETH:</b> $${e.usd?.toLocaleString()} (${e.usd_24h_change > 0 ? '+' : ''}${e.usd_24h_change?.toFixed(2)}%)\n\nMonitoring 18 data sources every 5 min. Will ping the moment anything moves.`,
+        'https://www.coingecko.com/en/', '🟢');
+    } catch(e) { console.error('Heartbeat failed:', e.message); }
   }
 
-  console.log(`\n✅ Cycle complete at ${new Date().toLocaleTimeString()}`);
+  console.log(`\n✅ Cycle complete — ${alertsThisCycle} alerts sent at ${new Date().toLocaleTimeString()}`);
 }
 
 run();
