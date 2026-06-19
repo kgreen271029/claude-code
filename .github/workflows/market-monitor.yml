@@ -2,12 +2,18 @@ name: 24/7 Market Monitor
 
 on:
   schedule:
-    - cron: '*/5 * * * *'
+    - cron: '0 */5 * * *'
+    - cron: '*/30 * * * *'
   workflow_dispatch:
+
+concurrency:
+  group: market-monitor
+  cancel-in-progress: false
 
 jobs:
   monitor:
     runs-on: ubuntu-latest
+    timeout-minutes: 350
     steps:
       - uses: actions/checkout@v4
 
@@ -17,8 +23,8 @@ jobs:
 
       - run: npm install axios
 
-      - name: Run market monitor
+      - name: Run market monitor (loops every 5 min for ~5.5 hours)
         env:
-          TELEGRAM_BOT_TOKEN: 8676839503:AAH3wz-_zwO6IHaXoPuxL5u0MaDZ0Zi_Z7s
-          TELEGRAM_CHAT_ID: 6470474178
-        run: timeout 270 node market-monitor-24-7.js || true
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: timeout 20400 node market-monitor-24-7.js || true
