@@ -2,9 +2,20 @@
 
 /**
  * COMPREHENSIVE 24/7 MARKET MONITOR
+ * Covers everything that moves markets:
+ * - Crypto prices & trending
+ * - Stock market news (RSS)
+ * - Reddit sentiment (WSB, stocks, crypto)
+ * - SEC insider trading (EDGAR)
+ * - US Treasury yields
+ * - Fear & Greed index
+ * - Breaking financial news (RSS)
+ * - New crypto listings
+ * - Global market snapshot
  */
 
 const axios = require('axios');
+const https = require('https');
 const fs = require('fs');
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '8676839503:AAH3wz-_zwO6IHaXoPuxL5u0MaDZ0Zi_Z7s';
@@ -21,11 +32,17 @@ function saveCache() {
 }
 function seen(key) { return !!cache[key]; }
 function markSeen(key) { cache[key] = Date.now(); saveCache(); }
+
+// Prune old cache keys (>24h) to avoid growing forever
 function pruneCache() {
   const cutoff = Date.now() - 24 * 60 * 60 * 1000;
-  for (const k of Object.keys(cache)) { if (cache[k] < cutoff) delete cache[k]; }
+  for (const k of Object.keys(cache)) {
+    if (cache[k] < cutoff) delete cache[k];
+  }
   saveCache();
 }
+
+let alertCount = 0;
 
 async function tg(title, body, link, emoji) {
   const linkPart = link ? `\n\n<a href="${link}">🔗 Read more</a>` : '';
@@ -34,32 +51,41 @@ async function tg(title, body, link, emoji) {
     await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
       chat_id: CHAT_ID, text, parse_mode: 'HTML', disable_web_page_preview: true
     }, { timeout: 12000 });
+    alertCount++;
     console.log(`✅ ${title.substring(0, 70)}`);
   } catch(e) {
-    console.error(`❌ TG: ${e.response?.data?.description || e.message}`);
+    console.error(`❌ TG failed: ${e.response?.data?.description || e.message}`);
   }
 }
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
+// ─── RSS PARSER (no npm module needed) ───────────────────────────────────────
 function parseRSS(xml) {
   const items = [];
-  const blocks = xml.match(/<item[\s\S]*?<\/item>/g) || [];
-  for (const b of blocks) {
-    const title = (b.match(/<title[^>]*><!\[CDATA\[([\s\S]*?)\]\]><\/title>/) || b.match(/<title[^>]*>([\s\S]*?)<\/title>/))?.[1]?.trim();
-    const link  = (b.match(/<link[^>]*>(https?:\/\/[^<]+)<\/link>/))?.[1]?.trim();
-    const desc  = (b.match(/<description[^>]*><!\[CDATA\[([\s\S]*?)\]\]><\/description>/) || b.match(/<description[^>]*>([\s\S]*?)<\/description>/))?.[1]?.replace(/<[^>]+>/g,'').replace(/&amp;/g,'&').trim().substring(0,220);
+  const itemBlocks = xml.match(/<item[\s\S]*?<\/item>/g) || [];
+  for (const block of itemBlocks) {
+    const title = (block.match(/<title[^>]*><!\[CDATA\[([\s\S]*?)\]\]><\/title>/) ||
+                   block.match(/<title[^>]*>([\s\S]*?)<\/title>/))?.[1]?.trim();
+    const link  = (block.match(/<link[^>]*>(https?:\/\/[^<]+)<\/link>/) ||
+                   block.match(/<link[^>]*><!\[CDATA\[([\s\S]*?)\]\]><\/link>/))?.[1]?.trim();
+    const desc  = (block.match(/<description[^>]*><!\[CDATA\[([\s\S]*?)\]\]><\/description>/) ||
+                   block.match(/<description[^>]*>([\s\S]*?)<\/description>/))?.[1]
+                   ?.replace(/<[^>]+>/g, '').replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').trim().substring(0,200);
     if (title && link) items.push({ title, link, desc: desc || '' });
   }
   return items;
 }
 
 async function fetchRSS(url) {
-  const res = await axios.get(url, { timeout: 12000, headers: { 'User-Agent': 'Mozilla/5.0 MarketBot/1.0' } });
+  const res = await axios.get(url, {
+    timeout: 12000,
+    headers: { 'User-Agent': 'Mozilla/5.0 (compatible; MarketBot/1.0)' }
+  });
   return parseRSS(res.data);
 }
 
-// 1. CRYPTO PRICES
+// ─── 1. CRYPTO PRICES ────────────────────────────────────────────────────────
 async function checkCryptoPrices() {
   console.log('\n💰 Crypto prices...');
   try {
@@ -77,44 +103,46 @@ async function checkCryptoPrices() {
         const e = ch24 > 0 ? '📈' : '📉';
         await tg(
           `${coin.name} ${ch24 > 0 ? '+' : ''}${ch24.toFixed(1)}% today`,
-          `<b>Price:</b> $${coin.current_price?.toLocaleString()}\n<b>1h:</b> ${ch1h > 0 ? '+' : ''}${ch1h?.toFixed(2) || 'N/A'}%  |  <b>24h:</b> ${ch24 > 0 ? '+' : ''}${ch24.toFixed(2)}%  |  <b>7d:</b> ${coin.price_change_percentage_7d_in_currency > 0 ? '+' : ''}${coin.price_change_percentage_7d_in_currency?.toFixed(2) || 'N/A'}%\n<b>Volume:</b> $${(coin.total_volume/1e6).toFixed(0)}M  |  <b>MCap:</b> $${(coin.market_cap/1e9).toFixed(1)}B`,
+          `<b>Price:</b> $${coin.current_price?.toLocaleString()}\n<b>1h:</b> ${ch1h > 0 ? '+' : ''}${ch1h?.toFixed(2) || 'N/A'}%  |  <b>24h:</b> ${ch24 > 0 ? '+' : ''}${ch24.toFixed(2)}%  |  <b>7d:</b> ${coin.price_change_percentage_7d_in_currency > 0 ? '+' : ''}${coin.price_change_percentage_7d_in_currency?.toFixed(2) || 'N/A'}%\n<b>Volume:</b> $${(coin.total_volume / 1e6).toFixed(0)}M\n<b>Market Cap:</b> $${(coin.market_cap / 1e9).toFixed(1)}B`,
           `https://www.coingecko.com/en/coins/${coin.id}`, e
         );
         await sleep(600);
       }
     }
-  } catch(e) { console.error('Crypto prices:', e.message); }
+  } catch(e) { console.error('Crypto prices failed:', e.message); }
 }
 
-// 2. FEAR & GREED
+// ─── 2. FEAR & GREED ─────────────────────────────────────────────────────────
 async function checkFearGreed() {
   console.log('😨 Fear & Greed...');
   try {
-    const res = await axios.get('https://api.alternative.me/fng/', { timeout: 10000 });
-    const d = res.data.data?.[0];
+    const res  = await axios.get('https://api.alternative.me/fng/', { timeout: 10000 });
+    const d    = res.data.data?.[0];
     if (!d) return;
-    const val = parseInt(d.value);
-    const key = `fng_${new Date().toDateString()}`;
+    const val  = parseInt(d.value);
+    const key  = `fng_${new Date().toDateString()}`;
     if (!seen(key)) {
       markSeen(key);
       const e = val < 25 ? '🔴' : val < 45 ? '😨' : val > 75 ? '🟢' : val > 55 ? '😏' : '😐';
-      const signal = val < 25 ? 'EXTREME FEAR — Historically a buying signal'
+      const signal = val < 25 ? 'EXTREME FEAR — Historically a buying opportunity'
         : val < 45 ? 'Fear — Market nervous, watch for reversal'
         : val > 75 ? 'EXTREME GREED — Consider taking profits'
         : val > 55 ? 'Greed — Bulls in control'
-        : 'Neutral sentiment';
-      await tg(`Fear & Greed: ${val}/100 — ${d.value_classification}`,
+        : 'Neutral';
+      await tg(
+        `Crypto Fear & Greed: ${val}/100 — ${d.value_classification}`,
         `<b>Signal:</b> ${signal}`,
-        'https://alternative.me/crypto/fear-and-greed-index/', e);
+        'https://alternative.me/crypto/fear-and-greed-index/', e
+      );
     }
-  } catch(e) { console.error('Fear/Greed:', e.message); }
+  } catch(e) { console.error('Fear/Greed failed:', e.message); }
 }
 
-// 3. TRENDING COINS
+// ─── 3. TRENDING COINS ───────────────────────────────────────────────────────
 async function checkTrending() {
-  console.log('🔥 Trending...');
+  console.log('🔥 Trending coins...');
   try {
-    const res = await axios.get('https://api.coingecko.com/api/v3/search/trending', { timeout: 10000 });
+    const res  = await axios.get('https://api.coingecko.com/api/v3/search/trending', { timeout: 10000 });
     const coins = res.data.coins?.slice(0, 7) || [];
     if (!coins.length) return;
     const key = `trending_${new Date().toDateString()}_${new Date().getHours()}`;
@@ -123,183 +151,483 @@ async function checkTrending() {
       const list = coins.map((c,i) =>
         `${i+1}. <a href="https://www.coingecko.com/en/coins/${c.item.id}">${c.item.name}</a> (${c.item.symbol.toUpperCase()})`
       ).join('\n');
-      await tg('Top Trending Coins Right Now',
-        `Most searched coins on CoinGecko:\n\n${list}`,
+      await tg('🔥 Top Trending Coins Right Now', `Coins getting the most market attention:\n\n${list}`,
         'https://www.coingecko.com/en/discover', '🔥');
     }
-  } catch(e) { console.error('Trending:', e.message); }
+  } catch(e) { console.error('Trending failed:', e.message); }
 }
 
-// 4. NEW COIN LISTINGS
+// ─── 4. NEW COIN LISTINGS ────────────────────────────────────────────────────
 async function checkNewListings() {
-  console.log('\ud83d\udcb� New listings...');
+  console.log('💎 New coin listings...');
   try {
     const res = await axios.get('https://api.coingecko.com/api/v3/coins/list/new', { timeout: 10000 });
-    for (const coin of (res.data || []).slice(0, 5)) {
+    const newCoins = res.data?.slice(0, 5) || [];
+    for (const coin of newCoins) {
       const key = `newcoin_${coin.id}`;
       if (!seen(key)) {
         markSeen(key);
         await tg(
-          `New Coin Listed: ${coin.name} (${coin.symbol?.toUpperCase()})`,
+          `💎 New Coin Listed: ${coin.name} (${coin.symbol?.toUpperCase()})`,
           `<b>Name:</b> ${coin.name}\n<b>Symbol:</b> ${coin.symbol?.toUpperCase()}\n<b>Signal:</b> Brand new listing — early opportunity`,
-          `https://www.coingecko.com/en/coins/${coin.id}`, '💸');
+          `https://www.coingecko.com/en/coins/${coin.id}`, '💎'
+        );
         await sleep(600);
       }
     }
-  } catch(e) { console.error('New listings:', e.message); }
+  } catch(e) { console.error('New listings failed:', e.message); }
 }
 
-// 5. GLOBAL MARKET
+// ─── 5. GLOBAL MARKET SNAPSHOT ───────────────────────────────────────────────
 async function checkGlobalMarket() {
   console.log('🌍 Global market...');
   try {
-    const res = await axios.get('https://api.coingecko.com/api/v3/global', { timeout: 10000 });
-    const d = res.data.data;
-    const key = `global_${new Date().toDateString()}_${new Date().getHours()}`;
+    const res  = await axios.get('https://api.coingecko.com/api/v3/global', { timeout: 10000 });
+    const d    = res.data.data;
+    const key  = `global_${new Date().toDateString()}_${new Date().getHours()}`;
     if (!seen(key)) {
       markSeen(key);
-      const ch = d.market_cap_change_percentage_24h_usd;
-      const e = ch > 0 ? '🟢' : '🔴';
+      const mcapChange = d.market_cap_change_percentage_24h_usd;
+      const e = mcapChange > 0 ? '🟢' : '🔴';
       await tg(
-        `Crypto Market ${ch > 0 ? '+' : ''}${ch?.toFixed(2)}% in 24h`,
-        `<b>Total Market Cap:</b> $${(d.total_market_cap?.usd/1e12).toFixed(2)}T\n<b>24h Volume:</b> $${(d.total_volume?.usd/1e9).toFixed(1)}B\n<b>BTC Dominance:</b> ${d.btc_dominance?.toFixed(1)}%\n<b>ETH Dominance:</b> ${d.eth_dominance?.toFixed(1)}%`,
-        'https://www.coingecko.com/en/', e);
+        `Crypto Market Cap ${mcapChange > 0 ? '+' : ''}${mcapChange?.toFixed(2)}% in 24h`,
+        `<b>Total Market Cap:</b> $${(d.total_market_cap?.usd / 1e12).toFixed(2)}T\n<b>24h Volume:</b> $${(d.total_volume?.usd / 1e9).toFixed(1)}B\n<b>BTC Dominance:</b> ${d.btc_dominance?.toFixed(1)}%\n<b>ETH Dominance:</b> ${d.eth_dominance?.toFixed(1)}%\n<b>Active Cryptos:</b> ${d.active_cryptocurrencies?.toLocaleString()}`,
+        'https://www.coingecko.com/en/', e
+      );
     }
-  } catch(e) { console.error('Global market:', e.message); }
+  } catch(e) { console.error('Global market failed:', e.message); }
 }
 
-// 6. BREAKING NEWS (RSS)
+// ─── 6. BREAKING FINANCIAL NEWS (RSS) ────────────────────────────────────────
 async function checkBreakingNews() {
   console.log('📰 Breaking news...');
+
   const FEEDS = [
-    { name: 'Reuters',     url: 'https://feeds.reuters.com/reuters/businessNews' },
-    { name: 'Yahoo Finance', url: 'https://finance.yahoo.com/news/rssindex' },
-    { name: 'MarketWatch', url: 'https://feeds.content.dowjones.io/public/rss/mw_topstories' },
-    { name: 'CNBC',        url: 'https://www.cnbc.com/id/100003114/device/rss/rss.html' },
+    { name: 'Reuters Business', url: 'https://feeds.reuters.com/reuters/businessNews' },
+    { name: 'Yahoo Finance',    url: 'https://finance.yahoo.com/news/rssindex' },
+    { name: 'MarketWatch',      url: 'https://feeds.content.dowjones.io/public/rss/mw_topstories' },
+    { name: 'CNBC',             url: 'https://www.cnbc.com/id/100003114/device/rss/rss.html' },
+    { name: 'Investing.com',    url: 'https://www.investing.com/rss/news.rss' },
   ];
-  const KW = ['fed','federal reserve','interest rate','inflation','cpi','jobs report','gdp','recession',
-    'earnings','beats','misses','ipo','merger','acquisition','bankruptcy','layoffs','tariff',
-    'trump','crypto','bitcoin','crash','surge','rally','plunge','record','rate cut','rate hike',
-    'sec','fraud','insider','short squeeze'];
+
+  const KEYWORDS = [
+    'fed', 'federal reserve', 'interest rate', 'inflation', 'cpi', 'jobs report',
+    'gdp', 'recession', 'earnings', 'beats', 'misses', 'ipo', 'merger', 'acquisition',
+    'bankruptcy', 'layoffs', 'tariff', 'sanction', 'trump', 'crypto', 'bitcoin',
+    'crash', 'surge', 'rally', 'plunge', 'record', 'all-time', 'rate cut', 'rate hike',
+    'sec', 'investigation', 'fraud', 'insider', 'short', 'squeeze', 'short squeeze'
+  ];
+
+  for (const feed of FEEDS) {
+    try {
+      const items = await fetchRSS(feed.url);
+      for (const item of items.slice(0, 8)) {
+        const titleLower = item.title.toLowerCase();
+        const isImportant = KEYWORDS.some(kw => titleLower.includes(kw));
+        if (!isImportant) continue;
+        const key = `news_${item.title.substring(0, 60).replace(/\s/g, '_')}`;
+        if (seen(key)) continue;
+        markSeen(key);
+        await tg(
+          item.title.substring(0, 100),
+          item.desc ? item.desc.substring(0, 250) : 'Breaking market news',
+          item.link, '📰'
+        );
+        await sleep(800);
+      }
+    } catch(e) { console.error(`News feed failed (${feed.name}): ${e.message}`); }
+  }
+}
+
+// ─── 7. REDDIT SENTIMENT (WSB + Stocks + Crypto) ─────────────────────────────
+async function checkRedditSentiment() {
+  console.log('👾 Reddit sentiment...');
+
+  const SUBS = [
+    { name: 'wallstreetbets', label: 'WallStreetBets' },
+    { name: 'stocks',         label: 'r/stocks' },
+    { name: 'CryptoCurrency', label: 'r/CryptoCurrency' },
+  ];
+
+  for (const sub of SUBS) {
+    try {
+      const res = await axios.get(`https://www.reddit.com/r/${sub.name}/hot.json?limit=10`, {
+        headers: { 'User-Agent': 'MarketMonitorBot/1.0' }, timeout: 12000
+      });
+      const posts = res.data?.data?.children || [];
+
+      // Find post with most engagement (upvotes) that we haven't sent yet
+      for (const post of posts) {
+        const d = post.data;
+        if (d.score < 500) continue; // Only high-engagement posts
+        const key = `reddit_${d.id}`;
+        if (seen(key)) continue;
+        markSeen(key);
+
+        const titleLower = d.title.toLowerCase();
+        const isBullish = ['buy', 'bull', 'moon', 'calls', 'long', 'yolo', 'rocket'].some(k => titleLower.includes(k));
+        const isBearish = ['sell', 'bear', 'puts', 'short', 'crash', 'dump', 'rip'].some(k => titleLower.includes(k));
+        const sentiment = isBullish ? '🟢 Bullish' : isBearish ? '🔴 Bearish' : '⚪ Neutral';
+
+        await tg(
+          `${sub.label}: ${d.title.substring(0, 80)}`,
+          `<b>Upvotes:</b> ${d.score.toLocaleString()}\n<b>Comments:</b> ${d.num_comments.toLocaleString()}\n<b>Sentiment:</b> ${sentiment}`,
+          `https://reddit.com${d.permalink}`, '👾'
+        );
+        break; // One per subreddit per cycle
+      }
+    } catch(e) { console.error(`Reddit ${sub.name} failed: ${e.message}`); }
+    await sleep(500);
+  }
+}
+
+// ─── 8. SEC INSIDER TRADING (EDGAR) ──────────────────────────────────────────
+async function checkInsiderTrading() {
+  console.log('🔒 SEC insider filings...');
+  try {
+    // EDGAR full-text search for recent Form 4 filings (insider trades)
+    const res = await axios.get(
+      'https://efts.sec.gov/LATEST/search-index?q=%22form+4%22&dateRange=custom&startdt=' +
+      new Date().toISOString().split('T')[0] + '&enddt=' + new Date().toISOString().split('T')[0] +
+      '&_source=file_date,period_of_report,entity_name,file_num,form_type,file_num_search_page_url&hits.hits.total.value=true&hits.hits._source=true&hits.hits.highlight=true',
+      { timeout: 12000, headers: { 'User-Agent': 'MarketMonitorBot contact@example.com' } }
+    );
+    const hits = res.data?.hits?.hits || [];
+    for (const hit of hits.slice(0, 3)) {
+      const src = hit._source;
+      const key = `sec_${src.file_num || hit._id}`;
+      if (seen(key)) continue;
+      markSeen(key);
+      await tg(
+        `🔒 SEC Insider Filing: ${src.entity_name}`,
+        `<b>Company:</b> ${src.entity_name}\n<b>Form:</b> Form 4 (Insider Trade)\n<b>Filed:</b> ${src.file_date}\n<b>Signal:</b> Executive buying/selling detected`,
+        `https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&company=${encodeURIComponent(src.entity_name)}&type=4&dateb=&owner=include&count=10`,
+        '🔒'
+      );
+      await sleep(600);
+    }
+  } catch(e) { console.error('SEC EDGAR failed:', e.message); }
+}
+
+// ─── 9. US TREASURY YIELDS ───────────────────────────────────────────────────
+async function checkTreasuryYields() {
+  console.log('🏦 Treasury yields...');
+  try {
+    const today = new Date().toISOString().split('T')[0];
+    const res = await axios.get(
+      `https://home.treasury.gov/resource-center/data-chart-center/interest-rates/pages/xml?data=daily_treasury_yield_curve&field_tdr_date_value_month=${today.substring(0,7).replace('-','')}`,
+      { timeout: 12000, headers: { 'User-Agent': 'MarketMonitorBot/1.0' } }
+    );
+    const xml = res.data;
+    // Parse 2yr and 10yr yields
+    const tenYr = xml.match(/<d:BC_10YEAR>([\d.]+)<\/d:BC_10YEAR>/)?.[1];
+    const twoYr = xml.match(/<d:BC_2YEAR>([\d.]+)<\/d:BC_2YEAR>/)?.[1];
+    if (!tenYr || !twoYr) return;
+    const spread = (parseFloat(tenYr) - parseFloat(twoYr)).toFixed(2);
+    const key = `treasury_${today}`;
+    if (!seen(key)) {
+      markSeen(key);
+      const inverted = parseFloat(spread) < 0;
+      await tg(
+        `🏦 US Treasury Yields — ${today}`,
+        `<b>2-Year Yield:</b> ${twoYr}%\n<b>10-Year Yield:</b> ${tenYr}%\n<b>2/10 Spread:</b> ${spread}%\n<b>Yield Curve:</b> ${inverted ? '⚠️ INVERTED (recession signal)' : '✅ Normal'}`,
+        'https://home.treasury.gov/resource-center/data-chart-center/interest-rates',
+        inverted ? '⚠️' : '🏦'
+      );
+    }
+  } catch(e) { console.error('Treasury yields failed:', e.message); }
+}
+
+// ─── YAHOO FINANCE HELPER (free, no key) ─────────────────────────────────────
+async function yfQuote(symbol) {
+  const res = await axios.get(
+    `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}`,
+    { timeout: 12000, headers: { 'User-Agent': 'Mozilla/5.0 MarketBot/1.0' } }
+  );
+  const m = res.data?.chart?.result?.[0]?.meta;
+  if (!m) return null;
+  const price = m.regularMarketPrice;
+  const prev  = m.chartPreviousClose || m.previousClose;
+  const change = prev ? ((price - prev) / prev) * 100 : 0;
+  return { price, prev, change, symbol };
+}
+
+// ─── 10. STOCK INDICES (S&P, Nasdaq, Dow, VIX, Russell) ──────────────────────
+async function checkStockIndices() {
+  console.log('📊 Stock indices...');
+  const INDICES = [
+    { sym: '^GSPC', name: 'S&P 500' },
+    { sym: '^IXIC', name: 'Nasdaq' },
+    { sym: '^DJI',  name: 'Dow Jones' },
+    { sym: '^RUT',  name: 'Russell 2000' },
+    { sym: '^VIX',  name: 'VIX (Fear Index)' },
+  ];
+  const key = `indices_${new Date().toDateString()}_${new Date().getHours()}`;
+  if (seen(key)) return;
+  try {
+    const lines = [];
+    for (const idx of INDICES) {
+      const q = await yfQuote(idx.sym);
+      if (!q) continue;
+      const e = q.change > 0 ? '🟢' : '🔴';
+      lines.push(`${e} <b>${idx.name}:</b> ${q.price?.toLocaleString(undefined,{maximumFractionDigits:2})} (${q.change > 0 ? '+' : ''}${q.change.toFixed(2)}%)`);
+      await sleep(300);
+    }
+    if (lines.length) {
+      markSeen(key);
+      await tg('US Market Indices', lines.join('\n'),
+        'https://finance.yahoo.com/', '📊');
+    }
+  } catch(e) { console.error('Indices:', e.message); }
+}
+
+// ─── 11. BIG STOCK MOVERS (mega-cap watchlist) ───────────────────────────────
+async function checkStockMovers() {
+  console.log('🚀 Stock movers...');
+  const STOCKS = ['AAPL','MSFT','NVDA','TSLA','AMZN','GOOGL','META','AMD','NFLX','COIN','PLTR','MSTR','GME','AMC'];
+  for (const sym of STOCKS) {
+    try {
+      const q = await yfQuote(sym);
+      if (!q || !q.change) continue;
+      const key = `stock_${sym}_${new Date().toDateString()}`;
+      if (Math.abs(q.change) > 4 && !seen(key)) {
+        markSeen(key);
+        const e = q.change > 0 ? '📈' : '📉';
+        await tg(
+          `${sym} ${q.change > 0 ? '+' : ''}${q.change.toFixed(2)}%`,
+          `<b>Price:</b> $${q.price?.toLocaleString(undefined,{maximumFractionDigits:2})}\n<b>Change:</b> ${q.change > 0 ? '+' : ''}${q.change.toFixed(2)}%\n<b>Prev Close:</b> $${q.prev?.toFixed(2)}`,
+          `https://finance.yahoo.com/quote/${sym}`, e
+        );
+        await sleep(500);
+      }
+    } catch(e) { console.error(`Stock ${sym}:`, e.message); }
+    await sleep(200);
+  }
+}
+
+// ─── 12. COMMODITIES (Gold, Oil, Silver, NatGas) ─────────────────────────────
+async function checkCommodities() {
+  console.log('🛢️ Commodities...');
+  const COMM = [
+    { sym: 'GC=F', name: 'Gold' },
+    { sym: 'SI=F', name: 'Silver' },
+    { sym: 'CL=F', name: 'Crude Oil' },
+    { sym: 'NG=F', name: 'Natural Gas' },
+  ];
+  const key = `comm_${new Date().toDateString()}_${new Date().getHours()}`;
+  if (seen(key)) return;
+  try {
+    const lines = [];
+    for (const c of COMM) {
+      const q = await yfQuote(c.sym);
+      if (!q) continue;
+      const e = q.change > 0 ? '🟢' : '🔴';
+      lines.push(`${e} <b>${c.name}:</b> $${q.price?.toFixed(2)} (${q.change > 0 ? '+' : ''}${q.change.toFixed(2)}%)`);
+      await sleep(300);
+    }
+    if (lines.length) {
+      markSeen(key);
+      await tg('Commodities', lines.join('\n'), 'https://finance.yahoo.com/commodities/', '🛢️');
+    }
+  } catch(e) { console.error('Commodities:', e.message); }
+}
+
+// ─── 13. FOREX & DOLLAR INDEX ────────────────────────────────────────────────
+async function checkForex() {
+  console.log('💵 Forex / Dollar...');
+  const FX = [
+    { sym: 'DX-Y.NYB', name: 'US Dollar Index (DXY)' },
+    { sym: 'EURUSD=X', name: 'EUR/USD' },
+    { sym: 'USDJPY=X', name: 'USD/JPY' },
+    { sym: 'GBPUSD=X', name: 'GBP/USD' },
+  ];
+  const key = `forex_${new Date().toDateString()}_${new Date().getHours()}`;
+  if (seen(key)) return;
+  try {
+    const lines = [];
+    for (const f of FX) {
+      const q = await yfQuote(f.sym);
+      if (!q) continue;
+      const e = q.change > 0 ? '🟢' : '🔴';
+      lines.push(`${e} <b>${f.name}:</b> ${q.price?.toFixed(3)} (${q.change > 0 ? '+' : ''}${q.change.toFixed(2)}%)`);
+      await sleep(300);
+    }
+    if (lines.length) {
+      markSeen(key);
+      await tg('Forex & Dollar Index', lines.join('\n'), 'https://finance.yahoo.com/currencies/', '💵');
+    }
+  } catch(e) { console.error('Forex:', e.message); }
+}
+
+// ─── 14. CRYPTO TOP GAINERS / LOSERS ─────────────────────────────────────────
+async function checkGainersLosers() {
+  console.log('🎢 Crypto gainers/losers...');
+  const key = `gl_${new Date().toDateString()}_${new Date().getHours()}`;
+  if (seen(key)) return;
+  try {
+    const res = await axios.get(
+      'https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=250&price_change_percentage=24h',
+      { timeout: 15000 }
+    );
+    const coins = res.data.filter(c => c.price_change_percentage_24h != null && c.market_cap > 50e6);
+    const sorted = [...coins].sort((a,b) => b.price_change_percentage_24h - a.price_change_percentage_24h);
+    const gainers = sorted.slice(0, 5);
+    const losers  = sorted.slice(-5).reverse();
+    if (gainers.length) {
+      markSeen(key);
+      const g = gainers.map(c => `📈 <b>${c.symbol.toUpperCase()}</b> +${c.price_change_percentage_24h.toFixed(1)}% ($${c.current_price?.toLocaleString()})`).join('\n');
+      const l = losers.map(c => `📉 <b>${c.symbol.toUpperCase()}</b> ${c.price_change_percentage_24h.toFixed(1)}% ($${c.current_price?.toLocaleString()})`).join('\n');
+      await tg('Crypto Top Movers (24h)',
+        `<b>🔥 TOP GAINERS</b>\n${g}\n\n<b>🩸 TOP LOSERS</b>\n${l}`,
+        'https://www.coingecko.com/en/highlights', '🎢');
+    }
+  } catch(e) { console.error('Gainers/losers:', e.message); }
+}
+
+// ─── 15. HOT CRYPTO SECTORS (categories) ─────────────────────────────────────
+async function checkCryptoSectors() {
+  console.log('🏷️ Crypto sectors...');
+  const key = `sectors_${new Date().toDateString()}_${new Date().getHours()}`;
+  if (seen(key)) return;
+  try {
+    const res = await axios.get('https://api.coingecko.com/api/v3/coins/categories?order=market_cap_change_24h_desc', { timeout: 12000 });
+    const cats = (res.data || []).filter(c => c.market_cap_change_24h != null).slice(0, 5);
+    if (cats.length) {
+      markSeen(key);
+      const list = cats.map((c,i) => `${i+1}. <b>${c.name}</b> ${c.market_cap_change_24h > 0 ? '+' : ''}${c.market_cap_change_24h.toFixed(1)}%`).join('\n');
+      await tg('Hottest Crypto Sectors (24h)',
+        `Money rotating into:\n\n${list}`,
+        'https://www.coingecko.com/en/categories', '🏷️');
+    }
+  } catch(e) { console.error('Sectors:', e.message); }
+}
+
+// ─── 16. ETHEREUM GAS FEES ───────────────────────────────────────────────────
+async function checkGasFees() {
+  console.log('⛽ ETH gas...');
+  const key = `gas_${new Date().toDateString()}_${new Date().getHours()}`;
+  if (seen(key)) return;
+  try {
+    const res = await axios.get('https://api.coingecko.com/api/v3/coins/ethereum', { timeout: 10000 }).catch(()=>null);
+    // Use Etherscan-free gas oracle alternative via blocknative public endpoint
+    const gasRes = await axios.get('https://ethgasstation.info/api/ethgasAPI.json', { timeout: 8000 }).catch(()=>null);
+    if (gasRes?.data) {
+      markSeen(key);
+      const d = gasRes.data;
+      await tg('Ethereum Gas Fees',
+        `<b>Fast:</b> ${(d.fast/10).toFixed(0)} gwei\n<b>Standard:</b> ${(d.average/10).toFixed(0)} gwei\n<b>Slow:</b> ${(d.safeLow/10).toFixed(0)} gwei\n<b>Signal:</b> ${d.average/10 > 50 ? '⚠️ High activity / congestion' : '✅ Network calm'}`,
+        'https://etherscan.io/gastracker', '⛽');
+    }
+  } catch(e) { console.error('Gas:', e.message); }
+}
+
+// ─── 17. CRYPTO DERIVATIVES / OPEN INTEREST ──────────────────────────────────
+async function checkDerivatives() {
+  console.log('📐 Derivatives...');
+  const key = `deriv_${new Date().toDateString()}_${new Date().getHours()}`;
+  if (seen(key)) return;
+  try {
+    const res = await axios.get('https://api.coingecko.com/api/v3/derivatives/exchanges?order=open_interest_btc_desc&per_page=5', { timeout: 12000 });
+    const ex = res.data || [];
+    if (ex.length) {
+      markSeen(key);
+      const list = ex.map((e,i) => `${i+1}. <b>${e.name}</b> — OI: ${e.open_interest_btc?.toLocaleString(undefined,{maximumFractionDigits:0})} BTC, Vol: ${(e.trade_volume_24h_btc/1000).toFixed(0)}K BTC`).join('\n');
+      await tg('Crypto Derivatives — Open Interest',
+        `Largest futures exchanges by open interest:\n\n${list}\n\nHigh OI = leverage building, watch for liquidation cascades.`,
+        'https://www.coingecko.com/en/derivatives', '📐');
+    }
+  } catch(e) { console.error('Derivatives:', e.message); }
+}
+
+// ─── 18. CRYPTO EXCHANGE LISTINGS / NEWS (Binance, Coinbase) ─────────────────
+async function checkExchangeNews() {
+  console.log('🏦 Exchange announcements...');
+  const FEEDS = [
+    { name: 'Coindesk', url: 'https://www.coindesk.com/arc/outboundfeeds/rss/' },
+    { name: 'Cointelegraph', url: 'https://cointelegraph.com/rss' },
+    { name: 'Decrypt', url: 'https://decrypt.co/feed' },
+  ];
+  const KW = ['binance','coinbase','listing','lists','delisting','etf','sec','hack','exploit','launch','airdrop','upgrade','halving','partnership'];
   for (const feed of FEEDS) {
     try {
       const items = await fetchRSS(feed.url);
       for (const item of items.slice(0, 8)) {
         const tl = item.title.toLowerCase();
         if (!KW.some(k => tl.includes(k))) continue;
-        const key = `news_${item.title.substring(0,60).replace(/\W/g,'_')}`;
+        const key = `exnews_${item.title.substring(0,60).replace(/\W/g,'_')}`;
         if (seen(key)) continue;
         markSeen(key);
-        await tg(item.title.substring(0, 100),
-          (item.desc || 'Breaking market news').substring(0, 250),
-          item.link, '📰');
-        await sleep(800);
+        await tg(item.title.substring(0,100),
+          (item.desc || 'Crypto news').substring(0,220), item.link, '🏦');
+        await sleep(700);
       }
-    } catch(e) { console.error(`News ${feed.name}: ${e.message}`); }
+    } catch(e) { console.error(`ExNews ${feed.name}:`, e.message); }
   }
 }
 
-// 7. REDDIT SENTIMENT
-async function checkRedditSentiment() {
-  console.log('👾 Reddit...');
-  const SUBS = [
-    { name: 'wallstreetbets', label: 'WallStreetBets' },
-    { name: 'stocks',         label: 'r/stocks' },
-    { name: 'CryptoCurrency', label: 'r/CryptoCurrency' },
-    { name: 'investing',      label: 'r/investing' },
-  ];
-  for (const sub of SUBS) {
-    try {
-      const res = await axios.get(`https://www.reddit.com/r/${sub.name}/hot.json?limit=10`, {
-        headers: { 'User-Agent': 'MarketMonitorBot/1.0' }, timeout: 12000
-      });
-      for (const post of res.data?.data?.children || []) {
-        const d = post.data;
-        if (d.score < 500) continue;
-        const key = `reddit_${d.id}`;
-        if (seen(key)) continue;
-        markSeen(key);
-        const tl = d.title.toLowerCase();
-        const isBull = ['buy','bull','moon','calls','long','yolo'].some(k => tl.includes(k));
-        const isBear = ['sell','bear','puts','short','crash','dump'].some(k => tl.includes(k));
-        const sent = isBull ? '🟢 Bullish' : isBear ? '🔴 Bearish' : '⚪ Neutral';
-        await tg(
-          `${sub.label}: ${d.title.substring(0, 80)}`,
-          `<b>Upvotes:</b> ${d.score.toLocaleString()}  |  <b>Comments:</b> ${d.num_comments.toLocaleString()}\n<b>Sentiment:</b> ${sent}`,
-          `https://reddit.com${d.permalink}`, '👾');
-        break;
-      }
-    } catch(e) { console.error(`Reddit ${sub.name}: ${e.message}`); }
-    await sleep(500);
-  }
-}
-
-// 8. SEC INSIDER TRADING
-async function checkInsiderTrading() {
-  console.log('🔒 SEC filings...');
-  try {
-    const today = new Date().toISOString().split('T')[0];
-    const res = await axios.get(
-      `https://efts.sec.gov/LATEST/search-index?q=%22form+4%22&dateRange=custom&startdt=${today}&enddt=${today}&_source=file_date,entity_name,file_num,form_type&hits.hits.total.value=true`,
-      { timeout: 12000, headers: { 'User-Agent': 'MarketMonitorBot contact@monitor.com' } }
-    );
-    for (const hit of (res.data?.hits?.hits || []).slice(0, 3)) {
-      const src = hit._source;
-      const key = `sec_${hit._id}`;
-      if (seen(key)) continue;
-      markSeen(key);
-      await tg(
-        `SEC Insider Trade: ${src.entity_name}`,
-        `<b>Company:</b> ${src.entity_name}\n<b>Form:</b> Form 4 (Insider Transaction)\n<b>Filed:</b> ${src.file_date}\n<b>Signal:</b> Executive bought or sold stock`,
-        `https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&company=${encodeURIComponent(src.entity_name)}&type=4&count=10`,
-        '🔒');
-      await sleep(600);
-    }
-  } catch(e) { console.error('SEC EDGAR:', e.message); }
-}
-
-// 9. TREASURY YIELDS
-async function checkTreasuryYields() {
-  console.log('🏦 Treasury yields...');
-  try {
-    const month = new Date().toISOString().substring(0,7).replace('-','');
-    const res = await axios.get(
-      `https://home.treasury.gov/resource-center/data-chart-center/interest-rates/pages/xml?data=daily_treasury_yield_curve&field_tdr_date_value_month=${month}`,
-      { timeout: 12000, headers: { 'User-Agent': 'MarketMonitorBot/1.0' } }
-    );
-    const tenYr = res.data.match(/<d:BC_10YEAR>([\d.]+)<\/d:BC_10YEAR>/)?.[1];
-    const twoYr = res.data.match(/<d:BC_2YEAR>([\d.]+)<\/d:BC_2YEAR>/)?.[1];
-    if (!tenYr || !twoYr) return;
-    const spread = (parseFloat(tenYr) - parseFloat(twoYr)).toFixed(2);
-    const key = `treasury_${new Date().toDateString()}`;
-    if (!seen(key)) {
-      markSeen(key);
-      const inverted = parseFloat(spread) < 0;
-      await tg(
-        `US Treasury Yields`,
-        `<b>2-Year:</b> ${twoYr}%\n<b>10-Year:</b> ${tenYr}%\n<b>Spread:</b> ${spread}%\n<b>Curve:</b> ${inverted ? '⚠️ INVERTED — recession signal' : '✅ Normal'}`,
-        'https://home.treasury.gov/resource-center/data-chart-center/interest-rates',
-        inverted ? '⚠️' : '🏦');
-    }
-  } catch(e) { console.error('Treasury:', e.message); }
-}
-
-// MAIN
+// ─── MAIN LOOP ────────────────────────────────────────────────────────────────
 async function run() {
   console.log(`\n${'='.repeat(60)}\n[${new Date().toISOString()}] MARKET MONITOR CYCLE\n${'='.repeat(60)}`);
   loadCache();
   pruneCache();
-  for (const check of [
-    checkCryptoPrices, checkFearGreed, checkTrending, checkNewListings,
-    checkGlobalMarket, checkBreakingNews, checkRedditSentiment,
-    checkInsiderTrading, checkTreasuryYields
-  ]) {
+
+  // Run all checks — if one fails, others still run.
+  // Each check fires its OWN alerts the moment it finds something,
+  // so a single cycle can send many alerts (or zero if nothing's new).
+  const checks = [
+    checkCryptoPrices,
+    checkFearGreed,
+    checkTrending,
+    checkNewListings,
+    checkGlobalMarket,
+    checkBreakingNews,
+    checkRedditSentiment,
+    checkInsiderTrading,
+    checkTreasuryYields,
+    checkStockIndices,
+    checkStockMovers,
+    checkCommodities,
+    checkForex,
+    checkGainersLosers,
+    checkCryptoSectors,
+    checkGasFees,
+    checkDerivatives,
+    checkExchangeNews,
+  ];
+
+  let alertsThisCycle = 0;
+  const before = alertCount;
+  for (const check of checks) {
     try { await check(); } catch(e) { console.error(`Check failed: ${e.message}`); }
-    await sleep(500);
+    await sleep(400);
   }
-  console.log(`\n✅ Cycle complete`);
+  alertsThisCycle = alertCount - before;
+
+  // Guarantee at least ONE message every cycle (every 5 min minimum),
+  // but checks above can and do send many more when news breaks.
+  if (alertsThisCycle === 0) {
+    try {
+      const res = await axios.get(
+        'https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum&vs_currencies=usd&include_24hr_change=true',
+        { timeout: 10000 }
+      );
+      const b = res.data.bitcoin, e = res.data.ethereum;
+      await tg('Market Pulse — All Quiet',
+        `No major moves this cycle. Current levels:\n\n<b>BTC:</b> $${b.usd?.toLocaleString()} (${b.usd_24h_change > 0 ? '+' : ''}${b.usd_24h_change?.toFixed(2)}%)\n<b>ETH:</b> $${e.usd?.toLocaleString()} (${e.usd_24h_change > 0 ? '+' : ''}${e.usd_24h_change?.toFixed(2)}%)\n\nMonitoring 18 data sources every 5 min. Will ping the moment anything moves.`,
+        'https://www.coingecko.com/en/', '🟢');
+    } catch(e) { console.error('Heartbeat failed:', e.message); }
+  }
+
+  console.log(`\n✅ Cycle complete — ${alertsThisCycle} alerts sent at ${new Date().toLocaleTimeString()}`);
 }
 
 run();
 setInterval(run, 5 * 60 * 1000);
-process.on('uncaughtException', e => { console.error('CRASH:', e.message); setTimeout(run, 10000); });
+
+process.on('uncaughtException', (e) => {
+  console.error('CRASH:', e.message);
+  setTimeout(run, 10000);
+});
+process.on('unhandledRejection', (e) => {
+  console.error('UNHANDLED:', e);
+});
