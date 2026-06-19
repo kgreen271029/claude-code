@@ -1,0 +1,11 @@
+{
+  "name": "market-monitor",
+  "version": "1.0.0",
+  "scripts": {
+    "start": "node market-monitor-24-7.js"
+  },
+  "dependencies": {
+    "axios": "^1.18.0",
+    "dotenv": "^17.4.2"
+  }
+}
