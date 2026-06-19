@@ -1,42 +1,24 @@
-name: Market Monitor - Real-time Alerts
+name: 24/7 Market Monitor
 
 on:
   schedule:
-    # Run every MINUTE for constant updates
-    - cron: '* * * * *'
-
-  # Allow manual trigger
+    - cron: '*/5 * * * *'
   workflow_dispatch:
 
 jobs:
-  market-monitor:
+  monitor:
     runs-on: ubuntu-latest
-    name: Market Analysis & Alert System
-
     steps:
-      - name: 📥 Checkout Repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: 📦 Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
-          node-version: '20'
-          cache: 'npm'
+          node-version: '22'
 
-      - name: 📚 Install Dependencies
-        run: npm install --production
+      - run: npm install axios
 
-      - name: 🚀 Run Market Monitor
+      - name: Run market monitor
         env:
           TELEGRAM_BOT_TOKEN: 8676839503:AAH3wz-_zwO6IHaXoPuxL5u0MaDZ0Zi_Z7s
           TELEGRAM_CHAT_ID: 6470474178
-        run: |
-          echo "🚀 Starting 24/7 Market Monitor..."
-          timeout 180 node market-monitor-24-7.js || true
-          echo "✅ Monitor cycle complete"
-
-      - name: 📊 Log Execution
-        if: always()
-        run: |
-          echo "✅ Market monitor executed at $(date)"
-          echo "📱 Alerts sent to Telegram Chat: 6470474178"
+        run: timeout 270 node market-monitor-24-7.js || true
