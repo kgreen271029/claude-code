@@ -18,8 +18,15 @@ const axios = require('axios');
 const https = require('https');
 const fs = require('fs');
 
-const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '8676839503:AAH3wz-_zwO6IHaXoPuxL5u0MaDZ0Zi_Z7s';
-const CHAT_ID   = process.env.TELEGRAM_CHAT_ID   || '6470474178';
+// Credentials come ONLY from environment / GitHub Secrets — never hardcoded,
+// so the repo can be public without leaking the bot token.
+const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+const CHAT_ID   = process.env.TELEGRAM_CHAT_ID;
+
+if (!BOT_TOKEN || !CHAT_ID) {
+  console.error('❌ Missing TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID. Set them as GitHub Secrets / env vars.');
+  process.exit(1);
+}
 
 const CACHE_FILE = '/tmp/.market-cache.json';
 let cache = {};
