@@ -2,14 +2,10 @@ name: 24/7 Market Monitor
 
 on:
   schedule:
-    # A fresh long run every 5 hours (each run lasts ~5.5h, so coverage overlaps)
-    - cron: '0 */5 * * *'
-    # Backup: also try every 30 min in case a run died early
-    - cron: '*/30 * * * *'
+    # Auto-fires every 15 minutes on its own — no manual trigger needed.
+    - cron: '*/15 * * * *'
   workflow_dispatch:
 
-# Only one run at a time — new triggers are skipped while one is active,
-# so we don't stack duplicate alerts or burn minutes.
 concurrency:
   group: market-monitor
   cancel-in-progress: false
@@ -17,7 +13,7 @@ concurrency:
 jobs:
   monitor:
     runs-on: ubuntu-latest
-    timeout-minutes: 350
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
@@ -27,8 +23,8 @@ jobs:
 
       - run: npm install axios
 
-      - name: Run market monitor (loops every 5 min for ~5.5 hours)
+      - name: Run market monitor (one full cycle of all 18 sources)
         env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: timeout 20400 node market-monitor-24-7.js || true
+          TELEGRAM_BOT_TOKEN: 8882828766:AAGalLGk4h0lkHNi2yS-Y9dsD1h6NV1XJFM
+          TELEGRAM_CHAT_ID: 6470474178
+        run: timeout 240 node market-monitor-24-7.js || true
