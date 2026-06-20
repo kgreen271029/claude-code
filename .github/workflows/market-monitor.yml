@@ -2,8 +2,7 @@ name: 24/7 Market Monitor
 
 on:
   schedule:
-    # Auto-fires every 15 minutes on its own — no manual trigger needed.
-    - cron: '*/15 * * * *'
+    - cron: '*/5 * * * *'
   workflow_dispatch:
 
 concurrency:
@@ -25,6 +24,6 @@ jobs:
 
       - name: Run market monitor (one full cycle of all 18 sources)
         env:
-          TELEGRAM_BOT_TOKEN: 8882828766:AAGalLGk4h0lkHNi2yS-Y9dsD1h6NV1XJFM
-          TELEGRAM_CHAT_ID: 6470474178
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: timeout 240 node market-monitor-24-7.js || true
