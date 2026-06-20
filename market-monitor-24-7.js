@@ -958,31 +958,57 @@ async function checkLongTermPicks() {
   } catch(e) { console.error('Long-term:', e.message); }
 }
 
-// 28. LIVE SCAN — ALWAYS sends a fresh data snapshot every cycle (the heartbeat)
+// 28. LIVE SCAN — ALWAYS sends a fresh snapshot every cycle (multi-source, never silent)
 async function checkLiveScan() {
   console.log('\n⚡ Live scan...');
-  try {
-    const SYMS = [['BTC-USD','BTC'],['ETH-USD','ETH'],['SOL-USD','SOL'],
-                  ['SPY','S&P 500'],['QQQ','Nasdaq'],['NVDA','NVDA'],['TSLA','TSLA'],['^VIX','VIX']];
-    const parts = [];
-    for (const [sym, label] of SYMS) {
+  const parts = [];
+
+  // Source A: Yahoo (stocks + crypto + VIX)
+  const SYMS = [['BTC-USD','BTC'],['ETH-USD','ETH'],['SOL-USD','SOL'],
+                ['SPY','S&P 500'],['QQQ','Nasdaq'],['NVDA','NVDA'],['TSLA','TSLA'],['^VIX','VIX']];
+  for (const [sym, label] of SYMS) {
+    try {
       const q = await yfQuote(sym);
-      if (q) {
+      if (q && q.price) {
         const dot = q.change >= 0 ? '🟢' : '🔴';
         const val = label === 'VIX' ? q.price.toFixed(1)
           : '$' + q.price.toLocaleString(undefined, { maximumFractionDigits: 2 });
         parts.push(`${dot} <b>${label}</b> ${val} (${q.change >= 0 ? '+' : ''}${q.change.toFixed(2)}%)`);
       }
-      await sleep(150);
-    }
-    if (parts.length) {
-      const t = new Date();
-      const hh = String(t.getUTCHours()).padStart(2,'0'), mm = String(t.getUTCMinutes()).padStart(2,'0');
-      await tg('⚡ LIVE MARKET SCAN',
-        `${parts.join('\n')}\n\n<i>${hh}:${mm} UTC — scanning 28 sources every ~3 min</i>`,
-        null, '⚡');
-    }
-  } catch(e) { console.error('Live scan:', e.message); }
+    } catch(e) {}
+    await sleep(120);
+  }
+
+  // Source B fallback: if Yahoo gave us little/nothing, use CoinGecko for crypto majors
+  if (parts.length < 3) {
+    try {
+      const r = await axios.get('https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum,solana&vs_currencies=usd&include_24hr_change=true', { timeout: 10000 });
+      for (const [id, label] of [['bitcoin','BTC'],['ethereum','ETH'],['solana','SOL']]) {
+        const d = r.data[id];
+        if (d) { const dot = d.usd_24h_change >= 0 ? '🟢' : '🔴';
+          parts.push(`${dot} <b>${label}</b> $${d.usd?.toLocaleString()} (${d.usd_24h_change >= 0 ? '+' : ''}${d.usd_24h_change?.toFixed(2)}%)`); }
+      }
+    } catch(e) {}
+  }
+
+  // Source C fallback: Binance public (very cloud-friendly) if still empty
+  if (parts.length === 0) {
+    try {
+      const r = await axios.get('https://api.binance.com/api/v3/ticker/24hr?symbols=["BTCUSDT","ETHUSDT","SOLUSDT"]', { timeout: 10000 });
+      for (const t of r.data) {
+        const ch = parseFloat(t.priceChangePercent);
+        parts.push(`${ch >= 0 ? '🟢' : '🔴'} <b>${t.symbol.replace('USDT','')}</b> $${parseFloat(t.lastPrice).toLocaleString()} (${ch >= 0 ? '+' : ''}${ch.toFixed(2)}%)`);
+      }
+    } catch(e) {}
+  }
+
+  const t = new Date();
+  const hh = String(t.getUTCHours()).padStart(2,'0'), mm = String(t.getUTCMinutes()).padStart(2,'0');
+  // ALWAYS send — even if all data sources failed, send a status line so cadence never breaks
+  const body = parts.length
+    ? `${parts.join('\n')}\n\n<i>${hh}:${mm} UTC — live scan, every ~3 min</i>`
+    : `Data sources briefly throttled — retrying next cycle.\n<i>${hh}:${mm} UTC — monitor alive</i>`;
+  await tg('⚡ LIVE MARKET SCAN', body, null, '⚡');
 }
 
 // ─── MAIN LOOP ────────────────────────────────────────────────────────────────
@@ -1037,7 +1063,15 @@ async function run() {
   console.log(`\n✅ Cycle complete — ${alertsThisCycle} alerts sent at ${new Date().toLocaleTimeString()}`);
 }
 
-run();
+// Guaranteed startup ping — proves the bot can deliver from GitHub's servers.
+// Fires every time a run boots (every ~15 min via self-heal schedule).
+(async () => {
+  const t = new Date();
+  await tg('🟢 MONITOR ONLINE',
+    `Bot is live on GitHub's servers and will send updates continuously.\nLive scans every ~3 min + trade setups, news, game plan.\n\n<i>Booted ${String(t.getUTCHours()).padStart(2,'0')}:${String(t.getUTCMinutes()).padStart(2,'0')} UTC</i>`,
+    null, '🟢');
+  run();
+})();
 // Continuous: re-scan every 3 minutes for the life of the run (~5.5h per GitHub job)
 setInterval(run, 3 * 60 * 1000);
 
