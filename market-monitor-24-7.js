@@ -826,7 +826,7 @@ async function checkMarketMovers() {
 // 25. GAME PLAN — consolidated "what to BUY / SELL / OPTIONS" board (~3x/day)
 async function checkGamePlan() {
   console.log('\n🗒️ Building game plan...');
-  const slot = Math.floor(new Date().getHours() / 8); // 3 slots/day
+  const slot = Math.floor(new Date().getHours() / 4); // 3 slots/day
   const key = `gameplan_${new Date().toDateString()}_${slot}`;
   if (seen(key)) return;
 
@@ -890,7 +890,7 @@ function pctChange(closes, n) {
 // 26. MULTI-TIMEFRAME OUTLOOK — week / month / year bias for key assets
 async function checkMultiTimeframe() {
   console.log('\n🔭 Multi-timeframe outlook...');
-  const slot = Math.floor(new Date().getHours() / 8);
+  const slot = Math.floor(new Date().getHours() / 4);
   const key = `mtf_${new Date().toDateString()}_${slot}`;
   if (seen(key)) return;
   const ASSETS = [
@@ -958,6 +958,33 @@ async function checkLongTermPicks() {
   } catch(e) { console.error('Long-term:', e.message); }
 }
 
+// 28. LIVE SCAN — ALWAYS sends a fresh data snapshot every cycle (the heartbeat)
+async function checkLiveScan() {
+  console.log('\n⚡ Live scan...');
+  try {
+    const SYMS = [['BTC-USD','BTC'],['ETH-USD','ETH'],['SOL-USD','SOL'],
+                  ['SPY','S&P 500'],['QQQ','Nasdaq'],['NVDA','NVDA'],['TSLA','TSLA'],['^VIX','VIX']];
+    const parts = [];
+    for (const [sym, label] of SYMS) {
+      const q = await yfQuote(sym);
+      if (q) {
+        const dot = q.change >= 0 ? '🟢' : '🔴';
+        const val = label === 'VIX' ? q.price.toFixed(1)
+          : '$' + q.price.toLocaleString(undefined, { maximumFractionDigits: 2 });
+        parts.push(`${dot} <b>${label}</b> ${val} (${q.change >= 0 ? '+' : ''}${q.change.toFixed(2)}%)`);
+      }
+      await sleep(150);
+    }
+    if (parts.length) {
+      const t = new Date();
+      const hh = String(t.getUTCHours()).padStart(2,'0'), mm = String(t.getUTCMinutes()).padStart(2,'0');
+      await tg('⚡ LIVE MARKET SCAN',
+        `${parts.join('\n')}\n\n<i>${hh}:${mm} UTC — scanning 28 sources every ~3 min</i>`,
+        null, '⚡');
+    }
+  } catch(e) { console.error('Live scan:', e.message); }
+}
+
 // ─── MAIN LOOP ────────────────────────────────────────────────────────────────
 async function run() {
   console.log(`\n${'='.repeat(60)}\n[${new Date().toISOString()}] MARKET MONITOR CYCLE\n${'='.repeat(60)}`);
@@ -996,6 +1023,7 @@ async function run() {
     checkGamePlan,
     checkMultiTimeframe,
     checkLongTermPicks,
+    checkLiveScan, // ALWAYS sends a fresh snapshot — guarantees a ping every cycle
   ];
 
   let alertsThisCycle = 0;
@@ -1005,21 +1033,6 @@ async function run() {
     await sleep(400);
   }
   alertsThisCycle = alertCount - before;
-
-  // Guarantee at least ONE message every cycle (every 5 min minimum),
-  // but checks above can and do send many more when news breaks.
-  if (alertsThisCycle === 0) {
-    try {
-      const res = await axios.get(
-        'https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum&vs_currencies=usd&include_24hr_change=true',
-        { timeout: 10000 }
-      );
-      const b = res.data.bitcoin, e = res.data.ethereum;
-      await tg('Market Pulse — All Quiet',
-        `No major moves this cycle. Current levels:\n\n<b>BTC:</b> $${b.usd?.toLocaleString()} (${b.usd_24h_change > 0 ? '+' : ''}${b.usd_24h_change?.toFixed(2)}%)\n<b>ETH:</b> $${e.usd?.toLocaleString()} (${e.usd_24h_change > 0 ? '+' : ''}${e.usd_24h_change?.toFixed(2)}%)\n\nMonitoring 24 data sources + live trade-setup scanner every 5 min. Will ping the moment anything moves.`,
-        'https://www.coingecko.com/en/', '🟢');
-    } catch(e) { console.error('Heartbeat failed:', e.message); }
-  }
 
   console.log(`\n✅ Cycle complete — ${alertsThisCycle} alerts sent at ${new Date().toLocaleTimeString()}`);
 }
