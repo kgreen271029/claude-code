@@ -697,14 +697,18 @@ async function scanSetups(label, symbols, cacheTag, isCrypto) {
 // 19. STOCK TRADE SETUPS
 async function checkStockSetups() {
   const WATCH = ['AAPL','MSFT','NVDA','TSLA','AMZN','GOOGL','META','AMD','NFLX','COIN',
-                 'PLTR','MSTR','GME','AMC','SPY','QQQ','AVGO','MU','SMCI','ARM','BABA','UBER'];
+                 'PLTR','MSTR','GME','AMC','SPY','QQQ','AVGO','MU','SMCI','ARM','BABA','UBER',
+                 'ORCL','CRM','ADBE','QCOM','INTC','DIS','BA','JPM','V','MA','COST','WMT',
+                 'XOM','CVX','LLY','PANW','SHOP','SOFI','RIVN','HOOD','DKNG','MARA','RIOT'];
   await scanSetups('Stock', WATCH, 'stk', false);
 }
 
 // 20. CRYPTO TRADE SETUPS (Yahoo crypto symbols avoid CoinGecko rate limits)
 async function checkCryptoSetups() {
   const COINS = ['BTC-USD','ETH-USD','SOL-USD','BNB-USD','XRP-USD','DOGE-USD',
-                 'ADA-USD','AVAX-USD','LINK-USD','MATIC-USD','DOT-USD','LTC-USD'];
+                 'ADA-USD','AVAX-USD','LINK-USD','MATIC-USD','DOT-USD','LTC-USD',
+                 'SHIB-USD','TRX-USD','BCH-USD','NEAR-USD','UNI-USD','APT-USD',
+                 'ICP-USD','FIL-USD','ATOM-USD','INJ-USD','RNDR-USD','SUI-USD'];
   await scanSetups('Crypto', COINS, 'cx', true);
 }
 
@@ -876,6 +880,84 @@ async function checkGamePlan() {
   );
 }
 
+// % change over N trading days
+function pctChange(closes, n) {
+  if (!closes || closes.length < n + 1) return null;
+  const a = closes[closes.length - 1 - n], b = closes[closes.length - 1];
+  return a ? ((b - a) / a) * 100 : null;
+}
+
+// 26. MULTI-TIMEFRAME OUTLOOK — week / month / year bias for key assets
+async function checkMultiTimeframe() {
+  console.log('\n🔭 Multi-timeframe outlook...');
+  const slot = Math.floor(new Date().getHours() / 8);
+  const key = `mtf_${new Date().toDateString()}_${slot}`;
+  if (seen(key)) return;
+  const ASSETS = [
+    { sym: 'SPY', name: 'S&P 500' }, { sym: 'QQQ', name: 'Nasdaq 100' },
+    { sym: 'BTC-USD', name: 'Bitcoin' }, { sym: 'ETH-USD', name: 'Ethereum' },
+    { sym: 'NVDA', name: 'Nvidia' }, { sym: 'TSLA', name: 'Tesla' },
+    { sym: 'AAPL', name: 'Apple' }, { sym: 'GLD', name: 'Gold' },
+  ];
+  try {
+    const lines = [];
+    for (const a of ASSETS) {
+      const d = await yfDaily(a.sym, '1y');
+      if (!d || d.closes.length < 60) { await sleep(150); continue; }
+      const price = d.closes[d.closes.length - 1];
+      const wk = pctChange(d.closes, 5), mo = pctChange(d.closes, 21), yr = pctChange(d.closes, Math.min(251, d.closes.length - 1));
+      const s50 = sma(d.closes, 50), s200 = sma(d.closes, 200);
+      const biasW = wk > 0 ? '🟢' : '🔴';
+      const biasM = (s50 && price > s50) ? '🟢' : '🔴';
+      const biasY = (s200 && price > s200) ? '🟢' : '🔴';
+      lines.push(`<b>${a.name}</b>\n  Week ${biasW} ${wk > 0 ? '+' : ''}${wk?.toFixed(1)}% | Month ${biasM} ${mo > 0 ? '+' : ''}${mo?.toFixed(1)}% | Year ${biasY} ${yr > 0 ? '+' : ''}${yr?.toFixed(0)}%`);
+      await sleep(200);
+    }
+    if (lines.length) {
+      markSeen(key);
+      await tg('🔭 MULTI-TIMEFRAME OUTLOOK (Week / Month / Year)',
+        `${lines.join('\n')}\n\n🟢 = trend up on that timeframe, 🔴 = down.\nWeek = 5-day move, Month = vs 50-day avg, Year = vs 200-day avg.`,
+        'https://finance.yahoo.com/', '🔭');
+    }
+  } catch(e) { console.error('MTF:', e.message); }
+}
+
+// 27. LONG-TERM PORTFOLIO IDEAS — what to hold for the year (1x/day)
+async function checkLongTermPicks() {
+  console.log('\n🏛️ Long-term picks...');
+  const key = `longterm_${new Date().toDateString()}`;
+  if (seen(key)) return;
+  const UNIVERSE = ['AAPL','MSFT','NVDA','GOOGL','AMZN','META','AVGO','TSLA','AMD','NFLX',
+                    'COIN','PLTR','MSTR','UBER','ORCL','CRM','ADBE','QCOM','MU','ARM',
+                    'LLY','JPM','V','MA','COST','WMT','XOM','CVX','SMCI','PANW'];
+  try {
+    const scored = [];
+    for (const sym of UNIVERSE) {
+      const d = await yfDaily(sym, '1y');
+      if (!d || d.closes.length < 200) { await sleep(120); continue; }
+      const price = d.closes[d.closes.length - 1];
+      const yr = pctChange(d.closes, Math.min(251, d.closes.length - 1));
+      const mo = pctChange(d.closes, 21);
+      const s200 = sma(d.closes, 200);
+      const r = rsi(d.closes);
+      const aboveTrend = s200 && price > s200;
+      // Long-term quality: in an uptrend, strong 1y return, not blow-off overbought
+      if (aboveTrend && yr != null) scored.push({ sym, yr, mo, r, aboveTrend });
+      await sleep(120);
+    }
+    if (scored.length) {
+      markSeen(key);
+      scored.sort((a, b) => b.yr - a.yr);
+      const buys = scored.slice(0, 8).map((x, i) =>
+        `${i + 1}. <b>${x.sym}</b> — +${x.yr.toFixed(0)}% / yr, +${x.mo?.toFixed(0)}% / mo, RSI ${x.r?.toFixed(0)} ${x.r > 75 ? '(hot — wait for dip)' : '(ok)'}`
+      ).join('\n');
+      await tg('🏛️ LONG-TERM PORTFOLIO IDEAS (1-Year Horizon)',
+        `Strongest uptrends to accumulate for the months/year ahead (all above their 200-day trend):\n\n${buys}\n\n<i>Buy strength on dips; avoid chasing names with RSI > 75. Not financial advice.</i>`,
+        'https://finance.yahoo.com/', '🏛️');
+    }
+  } catch(e) { console.error('Long-term:', e.message); }
+}
+
 // ─── MAIN LOOP ────────────────────────────────────────────────────────────────
 async function run() {
   console.log(`\n${'='.repeat(60)}\n[${new Date().toISOString()}] MARKET MONITOR CYCLE\n${'='.repeat(60)}`);
@@ -912,6 +994,8 @@ async function run() {
     checkVolatilityRegime,
     checkMarketMovers,
     checkGamePlan,
+    checkMultiTimeframe,
+    checkLongTermPicks,
   ];
 
   let alertsThisCycle = 0;
