@@ -10,7 +10,7 @@ on:
 
 concurrency:
   group: market-monitor
-  cancel-in-progress: false   # never cancel a live run; queue the next one
+  cancel-in-progress: true   # next scheduled start swaps in newest code, no dead gap
 
 jobs:
   monitor:
