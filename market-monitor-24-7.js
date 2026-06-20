@@ -819,6 +819,63 @@ async function checkMarketMovers() {
   } catch(e) { console.error('Market movers:', e.message); }
 }
 
+// 25. GAME PLAN — consolidated "what to BUY / SELL / OPTIONS" board (~3x/day)
+async function checkGamePlan() {
+  console.log('\n🗒️ Building game plan...');
+  const slot = Math.floor(new Date().getHours() / 8); // 3 slots/day
+  const key = `gameplan_${new Date().toDateString()}_${slot}`;
+  if (seen(key)) return;
+
+  const STOCKS = ['AAPL','MSFT','NVDA','TSLA','AMZN','GOOGL','META','AMD','NFLX','COIN',
+                  'PLTR','MSTR','GME','AMC','AVGO','MU','SMCI','ARM','BABA','UBER','SPY','QQQ'];
+  const CRYPTO = ['BTC-USD','ETH-USD','SOL-USD','BNB-USD','XRP-USD','DOGE-USD','ADA-USD','AVAX-USD','LINK-USD'];
+
+  const longs = [], shorts = [], flow = [];
+  const rank = (s) => (s.conf === 'HIGH' ? 100 : 50) + (parseFloat(s.rr) || 0);
+  const f = (x) => typeof x === 'number' ? (x >= 100 ? x.toFixed(2) : x.toFixed(x >= 1 ? 2 : 5)) : x;
+
+  for (const sym of [...STOCKS, ...CRYPTO]) {
+    try {
+      const d = await yfDaily(sym);
+      if (!d) { await sleep(120); continue; }
+      const s = buildSetup(sym, d);
+      if (!s) { await sleep(120); continue; }
+      const name = sym.replace('-USD', '');
+      if (s.dir.includes('LONG')) longs.push({ name, s });
+      else if (s.dir.includes('SHORT') || s.dir.includes('AVOID') || s.dir.includes('OVERBOUGHT')) shorts.push({ name, s });
+      // unusual-volume style flow note
+      const avgVol = sma(d.volumes, 20), lastVol = d.volumes[d.volumes.length - 1];
+      if (avgVol && lastVol / avgVol >= 1.8) flow.push({ name, volX: lastVol / avgVol, r: s.r });
+    } catch(e) {}
+    await sleep(150);
+  }
+
+  longs.sort((a, b) => rank(b.s) - rank(a.s));
+  shorts.sort((a, b) => rank(b.s) - rank(a.s));
+  flow.sort((a, b) => b.volX - a.volX);
+
+  if (!longs.length && !shorts.length) return;
+  markSeen(key);
+
+  const buyLines = longs.slice(0, 6).map(x =>
+    `🟢 <b>${x.name}</b> — Buy $${f(x.s.entry)} | Stop $${f(x.s.stop)} | Target $${f(x.s.target)} | R:R ${x.s.rr} <i>(${x.s.conf})</i>`
+  ).join('\n') || '— none right now';
+
+  const sellLines = shorts.slice(0, 5).map(x =>
+    `🔴 <b>${x.name}</b> — ${x.s.dir.replace(/^[^A-Za-z]+/, '')} | RSI ${x.s.r?.toFixed(0)}`
+  ).join('\n') || '— none right now';
+
+  const flowLines = flow.slice(0, 5).map(x =>
+    `📑 <b>${x.name}</b> — ${x.volX.toFixed(1)}× volume (RSI ${x.r?.toFixed(0)})`
+  ).join('\n') || '— quiet';
+
+  await tg(
+    '🗒️ MARKET GAME PLAN — Buys / Sells / Options',
+    `<b>🟢 TOP BUYS (long setups)</b>\n${buyLines}\n\n<b>🔴 SELL / AVOID</b>\n${sellLines}\n\n<b>📑 OPTIONS / UNUSUAL FLOW</b>\n${flowLines}\n\n<i>Auto-generated from live technicals. Not financial advice — always manage risk.</i>`,
+    'https://finance.yahoo.com/', '🗒️'
+  );
+}
+
 // ─── MAIN LOOP ────────────────────────────────────────────────────────────────
 async function run() {
   console.log(`\n${'='.repeat(60)}\n[${new Date().toISOString()}] MARKET MONITOR CYCLE\n${'='.repeat(60)}`);
@@ -854,6 +911,7 @@ async function run() {
     checkSectorRotation,
     checkVolatilityRegime,
     checkMarketMovers,
+    checkGamePlan,
   ];
 
   let alertsThisCycle = 0;
@@ -883,7 +941,8 @@ async function run() {
 }
 
 run();
-setInterval(run, 5 * 60 * 1000);
+// Continuous: re-scan every 3 minutes for the life of the run (~5.5h per GitHub job)
+setInterval(run, 3 * 60 * 1000);
 
 process.on('uncaughtException', (e) => {
   console.error('CRASH:', e.message);

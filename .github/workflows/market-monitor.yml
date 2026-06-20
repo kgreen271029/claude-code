@@ -2,7 +2,9 @@ name: 24/7 Market Monitor
 
 on:
   schedule:
-    - cron: '*/15 * * * *'
+    # Start a fresh long run every 4 hours; each run lasts ~5.5h so coverage
+    # overlaps and the next one queues seamlessly (concurrency keeps it to one).
+    - cron: '0 */4 * * *'
   workflow_dispatch:
 
 concurrency:
@@ -12,7 +14,7 @@ concurrency:
 jobs:
   monitor:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 350
     steps:
       - uses: actions/checkout@v4
 
@@ -22,8 +24,8 @@ jobs:
 
       - run: npm install axios
 
-      - name: Run market monitor (one full cycle of all 18 sources)
+      - name: Run market monitor (continuous, scans every ~3 min for ~5.5h)
         env:
-          TELEGRAM_BOT_TOKEN: 8882828766:AAGalLGk4h0lkHNi2yS-Y9dsD1h6NV1XJFM
-          TELEGRAM_CHAT_ID: 6470474178
-        run: timeout 240 node market-monitor-24-7.js || true
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: timeout 20400 node market-monitor-24-7.js || true
