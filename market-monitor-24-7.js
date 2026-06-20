@@ -572,6 +572,253 @@ async function checkExchangeNews() {
   }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// TECHNICAL ANALYSIS ENGINE — trade setups, options flow, sector rotation
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Daily OHLCV history from Yahoo (free, covers stocks AND crypto like BTC-USD)
+async function yfDaily(symbol, range = '1y') {
+  const res = await axios.get(
+    `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=${range}&interval=1d`,
+    { timeout: 12000, headers: { 'User-Agent': 'Mozilla/5.0 MarketBot/1.0' } }
+  );
+  const r = res.data?.chart?.result?.[0];
+  if (!r) return null;
+  const q = r.indicators?.quote?.[0] || {};
+  const closes  = (q.close  || []).filter(x => x != null);
+  const volumes = (q.volume || []).filter(x => x != null);
+  const highs   = (q.high   || []).filter(x => x != null);
+  const lows    = (q.low    || []).filter(x => x != null);
+  return { closes, volumes, highs, lows, meta: r.meta };
+}
+
+function sma(arr, n) {
+  if (!arr || arr.length < n) return null;
+  return arr.slice(-n).reduce((a, b) => a + b, 0) / n;
+}
+
+function rsi(closes, period = 14) {
+  if (!closes || closes.length < period + 1) return null;
+  let gains = 0, losses = 0;
+  for (let i = closes.length - period; i < closes.length; i++) {
+    const diff = closes[i] - closes[i - 1];
+    if (diff >= 0) gains += diff; else losses -= diff;
+  }
+  const avgGain = gains / period, avgLoss = losses / period;
+  if (avgLoss === 0) return 100;
+  const rs = avgGain / avgLoss;
+  return 100 - 100 / (1 + rs);
+}
+
+// Build an actionable trade-setup card (entry / stop / target / R:R)
+function buildSetup(sym, d) {
+  const closes = d.closes;
+  if (closes.length < 60) return null;
+  const price  = closes[closes.length - 1];
+  const r      = rsi(closes);
+  const s20    = sma(closes, 20);
+  const s50    = sma(closes, 50);
+  const s200   = sma(closes, 200);
+  const avgVol = sma(d.volumes, 20);
+  const lastVol = d.volumes[d.volumes.length - 1];
+  const volX   = avgVol ? lastVol / avgVol : 1;
+  const hi52   = Math.max(...d.highs.slice(-252));
+  const lo52   = Math.min(...d.lows.slice(-252));
+  if (r == null || !s50) return null;
+
+  const fmt = (x) => x >= 100 ? x.toFixed(2) : x.toFixed(x >= 1 ? 3 : 6);
+  const rr = (entry, stop, target) => Math.abs((target - entry) / (entry - stop)).toFixed(2);
+
+  // 1) BREAKOUT LONG — new high momentum + volume
+  if (price >= hi52 * 0.985 && volX >= 1.4) {
+    const entry = price, stop = price * 0.93, target = price * 1.15;
+    return { dir: '🟢 LONG — Breakout', conf: volX >= 2 ? 'HIGH' : 'MED',
+      reason: `Breaking 52-wk high ($${fmt(hi52)}) on ${volX.toFixed(1)}× volume. Momentum.`,
+      entry, stop, target, rr: rr(entry, stop, target), price, r, emoji: '🚀' };
+  }
+  // 2) OVERSOLD BOUNCE LONG — dip in an uptrend
+  if (r < 35 && s200 && price > s200) {
+    const entry = price, stop = Math.min(lo52 * 1.01, price * 0.94), target = s20 || price * 1.10;
+    return { dir: '🟢 LONG — Oversold bounce', conf: r < 28 ? 'HIGH' : 'MED',
+      reason: `RSI ${r.toFixed(0)} (oversold) but price above 200-day ($${fmt(s200)}) = uptrend dip.`,
+      entry, stop, target, rr: rr(entry, stop, target), price, r, emoji: '🎯' };
+  }
+  // 3) TREND-FOLLOW LONG — golden alignment
+  if (s200 && s50 > s200 && price > s50 && r >= 45 && r <= 65) {
+    const entry = price, stop = s50 * 0.97, target = price * 1.12;
+    return { dir: '🟢 LONG — Trend follow', conf: 'MED',
+      reason: `Uptrend (50d>200d), price riding 50-day, RSI ${r.toFixed(0)} healthy.`,
+      entry, stop, target, rr: rr(entry, stop, target), price, r, emoji: '📈' };
+  }
+  // 4) BREAKDOWN SHORT/AVOID — losing 52-wk low on volume
+  if (price <= lo52 * 1.02 && volX >= 1.4) {
+    const entry = price, stop = price * 1.07, target = price * 0.85;
+    return { dir: '🔴 SHORT / AVOID — Breakdown', conf: volX >= 2 ? 'HIGH' : 'MED',
+      reason: `Breaking 52-wk low ($${fmt(lo52)}) on ${volX.toFixed(1)}× volume. Weak.`,
+      entry, stop, target, rr: rr(entry, stop, target), price, r, emoji: '⚠️' };
+  }
+  // 5) OVERBOUGHT — take profits / don't chase
+  if (r > 75) {
+    return { dir: '🟡 OVERBOUGHT — Take profit / don\'t chase', conf: 'MED',
+      reason: `RSI ${r.toFixed(0)} extremely overbought. Pullback risk rising.`,
+      entry: price, stop: price * 1.05, target: (s20 || price * 0.92), rr: '—', price, r, emoji: '🔥' };
+  }
+  return null;
+}
+
+async function scanSetups(label, symbols, cacheTag, isCrypto) {
+  console.log(`\n🎯 ${label} trade setups...`);
+  for (const sym of symbols) {
+    try {
+      const d = await yfDaily(sym);
+      if (!d) { await sleep(150); continue; }
+      const s = buildSetup(sym, d);
+      if (s) {
+        const key = `setup_${cacheTag}_${sym}_${s.dir.substring(0,12)}_${new Date().toDateString()}`;
+        if (!seen(key)) {
+          markSeen(key);
+          const ccy = isCrypto || sym.includes('-USD');
+          const name = sym.replace('-USD', '');
+          const f = (x) => typeof x === 'number' ? (x >= 100 ? x.toFixed(2) : x.toFixed(x >= 1 ? 3 : 6)) : x;
+          await tg(
+            `${s.emoji} TRADE SETUP: ${name} — ${s.dir}`,
+            `<b>Confidence:</b> ${s.conf}\n<b>Price:</b> $${f(s.price)}  |  <b>RSI:</b> ${s.r?.toFixed(0)}\n\n<b>Entry:</b> $${f(s.entry)}\n<b>Stop:</b> $${f(s.stop)}\n<b>Target:</b> $${f(s.target)}\n<b>Risk/Reward:</b> ${s.rr}:1\n\n<b>Why:</b> ${s.reason}\n\n<i>Not financial advice — manage your risk.</i>`,
+            ccy ? `https://www.coingecko.com/` : `https://finance.yahoo.com/quote/${sym}`,
+            s.emoji
+          );
+          await sleep(400);
+        }
+      }
+    } catch(e) { console.error(`Setup ${sym}:`, e.message); }
+    await sleep(200);
+  }
+}
+
+// 19. STOCK TRADE SETUPS
+async function checkStockSetups() {
+  const WATCH = ['AAPL','MSFT','NVDA','TSLA','AMZN','GOOGL','META','AMD','NFLX','COIN',
+                 'PLTR','MSTR','GME','AMC','SPY','QQQ','AVGO','MU','SMCI','ARM','BABA','UBER'];
+  await scanSetups('Stock', WATCH, 'stk', false);
+}
+
+// 20. CRYPTO TRADE SETUPS (Yahoo crypto symbols avoid CoinGecko rate limits)
+async function checkCryptoSetups() {
+  const COINS = ['BTC-USD','ETH-USD','SOL-USD','BNB-USD','XRP-USD','DOGE-USD',
+                 'ADA-USD','AVAX-USD','LINK-USD','MATIC-USD','DOT-USD','LTC-USD'];
+  await scanSetups('Crypto', COINS, 'cx', true);
+}
+
+// 21. OPTIONS-FLOW PROXY — unusual volume + direction = likely big call/put flow
+async function checkOptionsFlow() {
+  console.log('\n📑 Options-flow signals...');
+  const NAMES = ['NVDA','TSLA','AAPL','AMD','META','AMZN','COIN','PLTR','MSTR','SPY','QQQ','GME','SMCI','MU','NFLX'];
+  for (const sym of NAMES) {
+    try {
+      const d = await yfDaily(sym, '3mo');
+      if (!d || d.closes.length < 21) { await sleep(150); continue; }
+      const price = d.closes[d.closes.length - 1];
+      const prev  = d.closes[d.closes.length - 2];
+      const dayChg = ((price - prev) / prev) * 100;
+      const avgVol = sma(d.volumes, 20);
+      const lastVol = d.volumes[d.volumes.length - 1];
+      const volX = avgVol ? lastVol / avgVol : 1;
+      // Unusual volume (>2x) + meaningful move = institutional/options positioning
+      if (volX >= 2 && Math.abs(dayChg) >= 3) {
+        const key = `oflow_${sym}_${new Date().toDateString()}`;
+        if (!seen(key)) {
+          markSeen(key);
+          const bias = dayChg > 0 ? '🟢 CALL-side (bullish) flow likely' : '🔴 PUT-side (bearish) flow likely';
+          await tg(
+            `📑 UNUSUAL ACTIVITY: ${sym} ${dayChg > 0 ? '+' : ''}${dayChg.toFixed(1)}%`,
+            `<b>Volume:</b> ${volX.toFixed(1)}× the 20-day average\n<b>Move:</b> ${dayChg > 0 ? '+' : ''}${dayChg.toFixed(2)}%\n<b>Price:</b> $${price.toFixed(2)}\n<b>Read:</b> ${bias}\n\nBig volume + sharp move = smart money positioning. Watch for follow-through.`,
+            `https://finance.yahoo.com/quote/${sym}/options`, '📑'
+          );
+          await sleep(400);
+        }
+      }
+    } catch(e) { console.error(`OFlow ${sym}:`, e.message); }
+    await sleep(150);
+  }
+}
+
+// 22. SECTOR ROTATION — which sectors money is flowing into/out of
+async function checkSectorRotation() {
+  console.log('\n🧭 Sector rotation...');
+  const key = `sector_rot_${new Date().toDateString()}_${new Date().getHours()}`;
+  if (seen(key)) return;
+  const SECTORS = [
+    { sym: 'XLK', name: 'Technology' }, { sym: 'XLF', name: 'Financials' },
+    { sym: 'XLE', name: 'Energy' },     { sym: 'XLV', name: 'Healthcare' },
+    { sym: 'XLY', name: 'Consumer Disc' }, { sym: 'XLP', name: 'Staples' },
+    { sym: 'XLI', name: 'Industrials' }, { sym: 'XLU', name: 'Utilities' },
+    { sym: 'XLB', name: 'Materials' },   { sym: 'XLC', name: 'Communications' },
+    { sym: 'XLRE', name: 'Real Estate' },
+  ];
+  try {
+    const rows = [];
+    for (const s of SECTORS) {
+      const q = await yfQuote(s.sym);
+      if (q) rows.push({ name: s.name, change: q.change });
+      await sleep(200);
+    }
+    if (rows.length >= 5) {
+      markSeen(key);
+      rows.sort((a, b) => b.change - a.change);
+      const top = rows.slice(0, 3).map(r => `🟢 <b>${r.name}</b> ${r.change > 0 ? '+' : ''}${r.change.toFixed(2)}%`).join('\n');
+      const bot = rows.slice(-3).reverse().map(r => `🔴 <b>${r.name}</b> ${r.change > 0 ? '+' : ''}${r.change.toFixed(2)}%`).join('\n');
+      const leader = rows[0].name;
+      const risk = ['Technology','Consumer Disc','Communications'].includes(leader) ? 'Risk-ON (growth leading)' :
+                   ['Utilities','Staples','Healthcare'].includes(leader) ? 'Risk-OFF (defensives leading)' : 'Mixed';
+      await tg('🧭 Sector Rotation Today',
+        `<b>Money flowing IN:</b>\n${top}\n\n<b>Money flowing OUT:</b>\n${bot}\n\n<b>Regime:</b> ${risk}`,
+        'https://finance.yahoo.com/sectors', '🧭');
+    }
+  } catch(e) { console.error('Sector rotation:', e.message); }
+}
+
+// 23. VOLATILITY REGIME — VIX-based risk-on/off call
+async function checkVolatilityRegime() {
+  console.log('\n🌡️ Volatility regime...');
+  const key = `vix_regime_${new Date().toDateString()}_${new Date().getHours()}`;
+  if (seen(key)) return;
+  try {
+    const q = await yfQuote('^VIX');
+    if (!q) return;
+    const v = q.price;
+    markSeen(key);
+    const regime = v >= 30 ? '🔴 HIGH FEAR — big swings, size down, hedges pay'
+      : v >= 20 ? '🟡 ELEVATED — choppy, be selective'
+      : v <= 13 ? '🟢 COMPLACENT — calm, but watch for surprise reversals'
+      : '🟢 NORMAL — trend-friendly conditions';
+    await tg(`🌡️ Volatility (VIX): ${v.toFixed(1)}`,
+      `<b>Regime:</b> ${regime}\n<b>Change:</b> ${q.change > 0 ? '+' : ''}${q.change.toFixed(2)}%\n\nVIX is the market's fear gauge — higher = more expected turbulence.`,
+      'https://finance.yahoo.com/quote/%5EVIX', '🌡️');
+  } catch(e) { console.error('VIX regime:', e.message); }
+}
+
+// 24. MARKET-WIDE TOP STOCK MOVERS (Yahoo screener — beyond the watchlist)
+async function checkMarketMovers() {
+  console.log('\n📊 Market-wide movers...');
+  const key = `mkt_movers_${new Date().toDateString()}_${new Date().getHours()}`;
+  if (seen(key)) return;
+  try {
+    const res = await axios.get(
+      'https://query1.finance.yahoo.com/v1/finance/screener/predefined/saved?count=10&scrIds=day_gainers',
+      { timeout: 12000, headers: { 'User-Agent': 'Mozilla/5.0 MarketBot/1.0' } }
+    ).catch(() => null);
+    const quotes = res?.data?.finance?.result?.[0]?.quotes || [];
+    if (quotes.length) {
+      markSeen(key);
+      const list = quotes.slice(0, 8).map(q =>
+        `📈 <b>${q.symbol}</b> +${q.regularMarketChangePercent?.toFixed(1)}% ($${q.regularMarketPrice?.toFixed(2)})`
+      ).join('\n');
+      await tg('📊 Market\'s Biggest Stock Gainers Today',
+        `${list}\n\nUnusual strength — often where the action and news is.`,
+        'https://finance.yahoo.com/gainers', '📊');
+    }
+  } catch(e) { console.error('Market movers:', e.message); }
+}
+
 // ─── MAIN LOOP ────────────────────────────────────────────────────────────────
 async function run() {
   console.log(`\n${'='.repeat(60)}\n[${new Date().toISOString()}] MARKET MONITOR CYCLE\n${'='.repeat(60)}`);
@@ -600,6 +847,13 @@ async function run() {
     checkGasFees,
     checkDerivatives,
     checkExchangeNews,
+    // ── Technical analysis / trade-setup engine ──
+    checkStockSetups,
+    checkCryptoSetups,
+    checkOptionsFlow,
+    checkSectorRotation,
+    checkVolatilityRegime,
+    checkMarketMovers,
   ];
 
   let alertsThisCycle = 0;
@@ -620,7 +874,7 @@ async function run() {
       );
       const b = res.data.bitcoin, e = res.data.ethereum;
       await tg('Market Pulse — All Quiet',
-        `No major moves this cycle. Current levels:\n\n<b>BTC:</b> $${b.usd?.toLocaleString()} (${b.usd_24h_change > 0 ? '+' : ''}${b.usd_24h_change?.toFixed(2)}%)\n<b>ETH:</b> $${e.usd?.toLocaleString()} (${e.usd_24h_change > 0 ? '+' : ''}${e.usd_24h_change?.toFixed(2)}%)\n\nMonitoring 18 data sources every 5 min. Will ping the moment anything moves.`,
+        `No major moves this cycle. Current levels:\n\n<b>BTC:</b> $${b.usd?.toLocaleString()} (${b.usd_24h_change > 0 ? '+' : ''}${b.usd_24h_change?.toFixed(2)}%)\n<b>ETH:</b> $${e.usd?.toLocaleString()} (${e.usd_24h_change > 0 ? '+' : ''}${e.usd_24h_change?.toFixed(2)}%)\n\nMonitoring 24 data sources + live trade-setup scanner every 5 min. Will ping the moment anything moves.`,
         'https://www.coingecko.com/en/', '🟢');
     } catch(e) { console.error('Heartbeat failed:', e.message); }
   }
