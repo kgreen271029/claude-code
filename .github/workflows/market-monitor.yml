@@ -2,14 +2,15 @@ name: 24/7 Market Monitor
 
 on:
   schedule:
-    # Start a fresh long run every 4 hours; each run lasts ~5.5h so coverage
-    # overlaps and the next one queues seamlessly (concurrency keeps it to one).
-    - cron: '0 */4 * * *'
+    # Self-heal: every 15 min GitHub tries to start a run. If one is already
+    # running, this one queues (concurrency keeps exactly one alive). If none
+    # is running, it starts within 15 min — so it can never sit dead for long.
+    - cron: '*/15 * * * *'
   workflow_dispatch:
 
 concurrency:
   group: market-monitor
-  cancel-in-progress: true
+  cancel-in-progress: false   # never cancel a live run; queue the next one
 
 jobs:
   monitor:
